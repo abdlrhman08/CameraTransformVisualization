@@ -52,6 +52,9 @@ struct Node {
     bool spin = false;        // RotateX/Y/Z: animate the angle
     float spinSpeed = 30.0f;  // degrees per second
 
+    // Object params
+    int shape = 0;            // 0 = cube, 1 = flat triangle
+
     // Camera params (initial pose, before any transforms in its chain)
     glm::vec3 camPos{0.0f, 2.0f, 7.0f};
     glm::vec3 camTarget{0.0f, 0.5f, 0.0f};
@@ -104,9 +107,12 @@ struct Link {
     int endAttr = -1;   // input attribute id
 };
 
+enum ObjectShape { kShapeCube = 0, kShapeTriangle = 1 };
+
 struct ObjectInstance {
     int sourceNodeId = -1;  // the Object node this chain started from
     glm::mat4 model{1.0f};
+    int shape = kShapeCube;
 };
 
 // Everything the renderer needs, produced by NodeGraph::Evaluate.
@@ -114,7 +120,7 @@ struct EvalResult {
     std::vector<ObjectInstance> objects;
     bool hasOutput = false;
     bool hasCamera = false;
-    bool hasProjection = false;
+    bool hasProjection = false;  // false: P is the identity, only M and V are applied
     glm::mat4 cameraPose{1.0f};  // C: camera -> world
     glm::mat4 view{1.0f};        // V = C^-1: world -> camera
     glm::mat4 projection{1.0f};  // P
@@ -258,7 +264,11 @@ struct NodeGraph {
         if (!out) r.warnings.push_back("No MVP Output node: add one with right-click.");
 
         if (out) for (Node* m : AllUpstream(InAttr(out->id))) {
-            if (m->kind == ChainKind::Model) r.objects.push_back({SourceOf(m), m->cumulativeMatrix});
+            if (m->kind == ChainKind::Model) {
+                int src = SourceOf(m);
+                Node* srcNode = FindNode(src);
+                r.objects.push_back({src, m->cumulativeMatrix, srcNode ? srcNode->shape : kShapeCube});
+            }
             else r.warnings.push_back("Model pin: '" + m->name + "' is not part of an Object chain.");
         }
         if (out && r.objects.empty()) r.warnings.push_back("Nothing is connected to Model.");
@@ -285,12 +295,23 @@ struct NodeGraph {
             r.fovDeg = p->fovDeg; r.aspect = p->aspect;
             r.nearPlane = glm::max(p->nearPlane, 0.001f);
             r.farPlane = glm::max(p->farPlane, r.nearPlane + 0.01f);
-        } else if (out) {
-            r.warnings.push_back(p ? "Projection pin must come straight from a Projection node."
-                                   : "Nothing is connected to Projection (using a default one).");
+        } else if (p) {
+            r.warnings.push_back("Projection pin must come straight from a Projection node.");
         }
-        Node tmp; tmp.fovDeg = r.fovDeg; tmp.aspect = r.aspect; tmp.nearPlane = r.nearPlane; tmp.farPlane = r.farPlane;
-        r.projection = tmp.ProjectionMatrix();
+
+        if (r.hasProjection) {
+            Node tmp; tmp.fovDeg = r.fovDeg; tmp.aspect = r.aspect; tmp.nearPlane = r.nearPlane; tmp.farPlane = r.farPlane;
+            r.projection = tmp.ProjectionMatrix();
+        } else {
+            // No projection at all: P = identity, so clip = V * M * v and w stays 1.
+            // The GPU keeps x, y, z in [-1, 1] of camera space: a 2x2x2 box around
+            // the camera. Its "near" face (depth 0) is z = -1, one unit in front of
+            // the camera, and its "far" face (depth 1) is z = +1, behind it.
+            // Stored as distances in front of the camera, so near = 1 and far = -1.
+            r.nearPlane = 1.0f;
+            r.farPlane = -1.0f;
+            r.projection = glm::mat4(1.0f);
+        }
         return r;
     }
 

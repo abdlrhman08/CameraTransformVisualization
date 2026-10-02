@@ -8,8 +8,8 @@ transforms with a node graph, and three views show the same scene:
 2. **What actually happens.** The camera never moves. It sits at the origin
    looking down -Z, and the whole world is moved by `V = inverse(C)`.
    - The **perspective divide** slider bends the scene from eye space into the
-     projected space. The frustum turns into a box and identical pillars
-     shrink with distance, because x and y get divided by depth.
+     projected space. The frustum turns into the cube [-1, 1] and far objects
+     shrink, because x and y get divided by depth.
    - The depth dropdown switches between keeping real distance (easy to read)
      and NDC z, which is what the depth buffer stores. NDC z crowds
      everything towards the far plane.
@@ -17,9 +17,16 @@ transforms with a node graph, and three views show the same scene:
 3. **What the camera sees.** The final image, `clip = P * V * M * vertex`.
 
 Windows 1 and 2 can be orbited by dragging and zoomed with the mouse wheel.
-Things the camera can't see are dimmed. Trails show the camera's path in
-window 1 and the world origin's path around the camera in window 2. They are
-mirror images of each other.
+Things the camera can't see are dimmed.
+
+**No projection.** If nothing is connected to the Projection pin, P is the
+identity, so `clip = V * M * vertex` and `w` stays 1. The GPU only keeps
+x, y and z in [-1, 1] of camera space, which is a 2x2x2 box around the
+camera. Only objects inside that box show up, nothing shrinks with distance,
+and the image stretches to the window's shape. Depth also comes out reversed:
+z = -1, in front of the camera, is depth 0, and z = +1, behind it, is
+depth 1. So farther things draw on top. In view 2 the divide slider is
+disabled, because there is nothing to divide.
 
 ## Windows and docking
 
@@ -50,6 +57,9 @@ Camera ─► Rotate (orbit) ──────► MVP Output.View       (camera
 Projection ────────────────────► MVP Output.Projection
 ```
 
+- The editor starts with only the **MVP Output** node. **Graph > Load starter
+  example** builds a ready-made scene.
+- An **Object** is a unit cube or a flat orange triangle. Pick the shape on the node.
 - Chains read in **data-flow order**. `Object -> Rotate -> Translate` rotates
   the object first and then moves it, so `M = T * R`.
 - The camera chain builds the camera's pose `C`. The Output node inverts it to

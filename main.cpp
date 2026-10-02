@@ -205,6 +205,15 @@ static std::vector<Vertex> CubeVerts() {
     return verts;
 }
 
+// A flat orange triangle in the XY plane.
+static std::vector<Vertex> TriangleVerts() {
+    return {
+        {-0.6f, -0.5f, 0.0f, 1.0f, 0.55f, 0.12f},
+        { 0.6f, -0.5f, 0.0f, 1.0f, 0.55f, 0.12f},
+        { 0.0f,  0.6f, 0.0f, 1.0f, 0.55f, 0.12f},
+    };
+}
+
 // Ground grid on y = 0. Lines are split into 1-unit segments so they bend
 // smoothly (and clip cleanly) when the perspective divide is applied.
 static std::vector<Vertex> GridVerts(int half) {
@@ -255,6 +264,8 @@ static const int kFrustumWarpable = 24;
 static std::vector<Vertex> FrustumVerts(const EvalResult& ev) {
     float th = std::tan(glm::radians(ev.fovDeg) * 0.5f);
     auto corner = [&](float d, float sx, float sy) {
+        if (!ev.hasProjection)  // no projection: the box [-1, 1] around the camera
+            return glm::vec3(sx, sy, -d);
         return glm::vec3(sx * th * ev.aspect * d, sy * th * d, -d);
     };
     float n = ev.nearPlane, f = ev.farPlane;
@@ -266,7 +277,8 @@ static std::vector<Vertex> FrustumVerts(const EvalResult& ev) {
     glm::vec3 yellow(1.0f, 0.85f, 0.2f), dimYellow(0.7f, 0.6f, 0.2f);
     std::vector<Vertex> v;
     for (auto& e : edges) PushLine(v, p[e[0]], p[e[1]], yellow);
-    for (int i = 0; i < 4; ++i) PushLine(v, glm::vec3(0), p[i], dimYellow);
+    if (ev.hasProjection)  // lines from the eye to the near plane
+        for (int i = 0; i < 4; ++i) PushLine(v, glm::vec3(0), p[i], dimYellow);
     PushLine(v, {0, 0.2f, 0.2f}, {0, 0.55f, 0.2f}, {0.3f, 1.0f, 0.3f}); // camera's "up"
     return v;
 }
@@ -416,17 +428,13 @@ struct Renderer {
 // Scene
 // ---------------------------------------------------------------------------
 struct Scene {
-    Mesh cube, grid, axes, frustum, cameraTrail, worldTrail;
+    Mesh cube, triangle, grid, axes, frustum;
     Mesh ndcBox;   // edges of the cube [-1,1]^3 plus the center lines on its floor
-    std::vector<glm::mat4> pillars;   // static reference props, identical sizes at increasing depth
-    std::vector<glm::vec3> camTrailPts, worldTrailPts;
 };
 
 struct Options {
     bool playAnimations = true;
-    bool showPillars = true;
     bool dimOutside = true;
-    bool showTrails = true;
     bool showMatrices = true;
     // window 2
     float warp = 0.0f;
@@ -437,7 +445,7 @@ struct Options {
     bool clipOutside = false;
 };
 
-// Draws the "world": grid, axes, reference pillars and every object of the graph.
+// Draws the "world": grid, axes and every object of the graph.
 // `worldToScene` is identity when the observer looks at the world directly (window 1/3),
 // and V when the observer looks at eye space (window 2).
 static void DrawWorld(Renderer& r, Scene& s, const EvalResult& ev, const Options& opt,
@@ -446,12 +454,8 @@ static void DrawWorld(Renderer& r, Scene& s, const EvalResult& ev, const Options
     DrawOpts axes = base; axes.dim = false;
     r.Draw(s.axes, worldToScene, axes);
 
-    if (opt.showPillars) {
-        DrawOpts p = base;
-        if (base.tintAmount == 0.0f) { p.tint = glm::vec3(0.62f, 0.6f, 0.55f); p.tintAmount = 0.7f; }
-        for (auto& m : s.pillars) r.Draw(s.cube, worldToScene * m, p);
-    }
-    for (auto& o : ev.objects) r.Draw(s.cube, worldToScene * o.model, base);
+    for (auto& o : ev.objects)
+        r.Draw(o.shape == kShapeTriangle ? s.triangle : s.cube, worldToScene * o.model, base);
 }
 
 // Camera body + frustum. `camToScene` places the camera in scene space.
@@ -465,23 +469,6 @@ static void DrawCameraGizmo(Renderer& r, Scene& s, const glm::mat4& camToScene, 
     r.Draw(s.frustum, camToScene, fr, 0, kFrustumWarpable);
     fr.warp = false;
     r.Draw(s.frustum, camToScene, fr, kFrustumWarpable);
-}
-
-static void PushTrail(std::vector<glm::vec3>& pts, glm::vec3 p) {
-    if (!pts.empty() && glm::length(pts.back() - p) < 0.03f) return;
-    pts.push_back(p);
-    if (pts.size() > 800) pts.erase(pts.begin());
-}
-
-static void UploadTrail(Mesh& m, const std::vector<glm::vec3>& pts, glm::vec3 color) {
-    std::vector<Vertex> v;
-    v.reserve(pts.size());
-    for (size_t i = 0; i < pts.size(); ++i) {
-        float t = pts.size() > 1 ? (float)i / (float)(pts.size() - 1) : 1.0f; // fade older points
-        glm::vec3 c = color * (0.25f + 0.75f * t);
-        v.push_back({pts[i].x, pts[i].y, pts[i].z, c.r, c.g, c.b});
-    }
-    m.Upload(v, GL_LINE_STRIP, GL_STREAM_DRAW);
 }
 
 // ---------------------------------------------------------------------------
@@ -958,7 +945,12 @@ static void DrawNodeEditor(NodeGraph& graph, Options& opt, const EvalResult& las
 
             switch (n.type) {
                 case NodeType::Object:
-                    ImGui::TextDisabled("unit cube");
+                {
+                    const char* shapes[] = {"Cube", "Triangle"};
+                    ImGui::SetNextItemWidth(110.0f);
+                    ImGui::Combo("shape", &n.shape, shapes, 2);
+                    break;
+                }
                     break;
                 case NodeType::Translate:
                     ImGui::DragFloat3("offset", &n.vec.x, 0.05f);
@@ -997,7 +989,7 @@ static void DrawNodeEditor(NodeGraph& graph, Options& opt, const EvalResult& las
             }
 
             ImNodes::BeginOutputAttribute(NodeGraph::OutAttr(n.id));
-            ImGui::Indent(n.type == NodeType::Object ? 50.0f : 150.0f);
+            ImGui::Indent(n.type == NodeType::Object ? 120.0f : 150.0f);
             ImGui::TextUnformatted("out");
             ImNodes::EndOutputAttribute();
         }
@@ -1085,18 +1077,13 @@ static void DrawNodeEditor(NodeGraph& graph, Options& opt, const EvalResult& las
     ImGui::End();
 }
 
-// Scene-wide toggles. Returns true when the user asked to clear the trails.
-static bool DrawSettingsWindow(Options& opt, bool* open) {
-    bool clearTrails = false;
+// Scene-wide toggles.
+static void DrawSettingsWindow(Options& opt, bool* open) {
     if (ImGui::Begin(kWinSettings, open)) {
         ImGui::SeparatorText("Animation");
         ImGui::Checkbox("Play animations", &opt.playAnimations);
         ImGui::SeparatorText("Scene");
-        ImGui::Checkbox("Reference pillars", &opt.showPillars);
         ImGui::Checkbox("Dim what the camera can't see", &opt.dimOutside);
-        ImGui::Checkbox("Trails", &opt.showTrails);
-        ImGui::SameLine();
-        clearTrails = ImGui::SmallButton("Clear");
         ImGui::SeparatorText("Perspective divide (view 2)");
         ImGui::SetNextItemWidth(-FLT_MIN);
         if (ImGui::SliderFloat("##warp", &opt.warp, 0.0f, 1.0f, "divide: %.2f")) opt.animateWarp = false;
@@ -1110,7 +1097,6 @@ static bool DrawSettingsWindow(Options& opt, bool* open) {
         ImGui::Checkbox("Show matrices on nodes", &opt.showMatrices);
     }
     ImGui::End();
-    return clearTrails;
 }
 
 // Every matrix in play, in one place.
@@ -1119,7 +1105,9 @@ static void DrawMatricesWindow(NodeGraph& graph, const EvalResult& ev, bool* ope
         ImGui::TextWrapped("clip = P * V * M * vertex, and V = inverse(C).");
         if (ImGui::CollapsingHeader("C: camera pose (camera -> world)", ImGuiTreeNodeFlags_DefaultOpen)) MatrixText(ev.cameraPose);
         if (ImGui::CollapsingHeader("V = inverse(C): world -> camera", ImGuiTreeNodeFlags_DefaultOpen)) MatrixText(ev.view);
-        if (ImGui::CollapsingHeader("P: camera -> clip space", ImGuiTreeNodeFlags_DefaultOpen)) MatrixText(ev.projection);
+        const char* pLabel = ev.hasProjection ? "P: camera -> clip space"
+                                              : "P: none, identity (clip = V * M * v)";
+        if (ImGui::CollapsingHeader(pLabel, ImGuiTreeNodeFlags_DefaultOpen)) MatrixText(ev.projection);
         for (size_t i = 0; i < ev.objects.size(); ++i) {
             const ObjectInstance& o = ev.objects[i];
             Node* src = graph.FindNode(o.sourceNodeId);
@@ -1144,8 +1132,9 @@ static void BuildStarterGraph(NodeGraph& g) {
     g.FindNode(rotA)->angleDeg = 30.0f;
     g.FindNode(trA)->vec = glm::vec3(0.0f, 0.5f, 0.0f);
 
-    // Object B: pushed far away, the same size as A, to show perspective shrinking.
+    // Object B: a triangle pushed far away, to show perspective shrinking.
     int objB = g.AddNode(NodeType::Object, "Object B");
+    g.FindNode(objB)->shape = kShapeTriangle;
     int trB  = g.AddNode(NodeType::Translate, "Translate");
     g.FindNode(trB)->vec = glm::vec3(1.2f, 0.5f, -9.0f);
 
@@ -1217,23 +1206,17 @@ int main() {
 
     Scene scene;
     scene.cube.Upload(CubeVerts(), GL_TRIANGLES);
+    scene.triangle.Upload(TriangleVerts(), GL_TRIANGLES);
     scene.grid.Upload(GridVerts(12), GL_LINES);
     scene.axes.Upload(AxesVerts(1.5f), GL_LINES);
     scene.ndcBox.Upload(NdcBoxVerts(), GL_LINES);
-    // Two rows of identical pillars marching away from the camera.
-    for (int i = 0; i < 5; ++i) {
-        float z = 3.0f - 4.0f * i;
-        for (float x : {-2.5f, 2.5f})
-            scene.pillars.push_back(glm::translate(glm::mat4(1.0f), {x, 1.0f, z}) *
-                                    glm::scale(glm::mat4(1.0f), {0.4f, 2.0f, 0.4f}));
-    }
 
     ViewportFBO thinkFbo, actualFbo, cameraFbo;
     OrbitCamera thinkOrbit;  thinkOrbit.target = {0, 0.5f, -2};  thinkOrbit.yawDeg = 40;  thinkOrbit.pitchDeg = 32; thinkOrbit.distance = 24;
     OrbitCamera actualOrbit; actualOrbit.target = {0, 0, -5};    actualOrbit.yawDeg = 42; actualOrbit.pitchDeg = 24; actualOrbit.distance = 22;
 
     NodeGraph graph;
-    BuildStarterGraph(graph);
+    ResetGraph(graph, false);  // start with just the MVP Output node
     Options opt;
     WindowVisibility win;
     bool resetLayout = false, firstFrame = true;
@@ -1293,10 +1276,7 @@ int main() {
 
         // ---------------- Node Editor, Settings ----------------
         if (win.editor) DrawNodeEditor(graph, opt, ev, &win.editor);
-        if (win.settings && DrawSettingsWindow(opt, &win.settings)) {
-            scene.camTrailPts.clear();
-            scene.worldTrailPts.clear();
-        }
+        if (win.settings) DrawSettingsWindow(opt, &win.settings);
 
         // ---------------- Animate + evaluate ----------------
         if (opt.playAnimations) {
@@ -1319,11 +1299,6 @@ int main() {
         const glm::mat4& C = ev.cameraPose;
         const glm::mat4& P = ev.projection;
 
-        // Trails: the camera's path in the world, and the world origin's path around the camera.
-        PushTrail(scene.camTrailPts, glm::vec3(C[3]));
-        PushTrail(scene.worldTrailPts, glm::vec3(V[3]));
-        UploadTrail(scene.cameraTrail, scene.camTrailPts, {1.0f, 0.75f, 0.2f});
-        UploadTrail(scene.worldTrail, scene.worldTrailPts, {0.3f, 0.9f, 1.0f});
         scene.frustum.Upload(FrustumVerts(ev), GL_LINES, GL_STREAM_DRAW);
 
 
@@ -1348,7 +1323,6 @@ int main() {
                     renderer.Begin(thinkFbo, vs);
                     DrawWorld(renderer, scene, ev, opt, glm::mat4(1.0f));
                     DrawCameraGizmo(renderer, scene, C, false);
-                    if (opt.showTrails) { DrawOpts t; t.dim = false; renderer.Draw(scene.cameraTrail, glm::mat4(1.0f), t); }
                     renderer.End();
 
                     ImVec2 pos = ImGui::GetCursorScreenPos();
@@ -1370,7 +1344,11 @@ int main() {
             ImGui::TextWrapped("The camera never moves: it sits at the origin looking down -Z, on a floor that never moves either. "
                                "The world is moved by V = inverse(C). The divide then squeezes what the camera sees into the cube [-1, 1].");
             ImGui::PushItemWidth(ImGui::GetContentRegionAvail().x * 0.35f);
+            ImGui::BeginDisabled(!ev.hasProjection);
             if (ImGui::SliderFloat("perspective divide", &opt.warp, 0.0f, 1.0f, "%.2f")) opt.animateWarp = false;
+            ImGui::EndDisabled();
+            if (!ev.hasProjection && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("No projection connected: w is always 1, so there is nothing to divide.");
             ImGui::SameLine(); ImGui::Checkbox("animate", &opt.animateWarp);
             ImGui::SameLine(); ImGui::Checkbox("ghost", &opt.showGhost);
             const char* depthModes[] = {"z: distance, spread evenly", "z: real NDC z (depth buffer)"};
@@ -1387,13 +1365,15 @@ int main() {
                     vs.obsProj = glm::perspective(glm::radians(45.0f), size.x / size.y, 0.1f, 500.0f);
                     vs.toEye = glm::mat4(1.0f);  // scene space = eye space
                     vs.camProj = P;
-                    vs.warp = opt.warp;
+                    // Without a projection w stays 1: the divide changes nothing.
+                    float warp = ev.hasProjection ? opt.warp : 0.0f;
+                    vs.warp = warp;
                     vs.depthMode = opt.depthMode;
                     vs.dimOutside = opt.dimOutside;
                     vs.nearPlane = ev.nearPlane; vs.farPlane = ev.farPlane;
                     vs.boxHalf = 4.0f;
                     vs.boxCenter = ev.nearPlane + vs.boxHalf;  // near face of the cube sits on the near plane
-                    vs.clipOutside = opt.clipOutside && opt.warp > 0.001f;
+                    vs.clipOutside = opt.clipOutside && (warp > 0.001f || !ev.hasProjection);
                     vs.bg = kActualBg;
                     renderer.Begin(actualFbo, vs);
 
@@ -1401,18 +1381,22 @@ int main() {
                     // Only the world moves; this never does.
                     glm::mat4 cubeToEye = glm::translate(glm::mat4(1.0f), {0, 0, -vs.boxCenter}) *
                                           glm::scale(glm::mat4(1.0f), {vs.boxHalf, vs.boxHalf, -vs.boxHalf});
+                    // No projection: NDC is camera space itself, so the [-1, 1] cube is the
+                    // 2x2x2 box around the camera (cube z = -1 is camera z = -1, in front).
+                    if (!ev.hasProjection) cubeToEye = glm::mat4(1.0f);
+                    float cubeAlpha = ev.hasProjection ? warp : 1.0f;
                     DrawOpts floor; floor.warp = false; floor.dim = false;
                     floor.tint = glm::vec3(0.22f, 0.3f, 0.45f); floor.tintAmount = 0.75f;
                     renderer.Draw(scene.grid, glm::translate(glm::mat4(1.0f), {0, -vs.boxHalf - 0.01f, -vs.boxCenter}), floor);
 
                     // The [-1,1] cube fades in as the divide is applied.
-                    if (opt.warp > 0.001f) {
+                    if (cubeAlpha > 0.001f) {
                         DrawOpts box; box.warp = false; box.dim = false;
-                        box.tint = vs.bg; box.tintAmount = 1.0f - opt.warp;
+                        box.tint = vs.bg; box.tintAmount = 1.0f - cubeAlpha;
                         renderer.Draw(scene.ndcBox, cubeToEye, box);
                     }
 
-                    if (opt.showGhost && opt.warp > 0.001f) {
+                    if (opt.showGhost && warp > 0.001f) {
                         // Where things were before the divide, as a faint wireframe.
                         glPolygonMode(GL_FRONT_AND_BACK, GL_LINE);
                         DrawOpts g; g.warp = false; g.dim = false; g.tint = glm::vec3(0.32f, 0.3f, 0.36f); g.tintAmount = 1.0f;
@@ -1421,7 +1405,6 @@ int main() {
                     }
                     DrawWorld(renderer, scene, ev, opt, V, {}, false);  // the world, moved by V (its floor grid is left out)
                     DrawCameraGizmo(renderer, scene, glm::mat4(1.0f), true);
-                    if (opt.showTrails) { DrawOpts t; t.dim = false; renderer.Draw(scene.worldTrail, glm::mat4(1.0f), t); }
                     renderer.End();
 
                     ImVec2 pos = ImGui::GetCursorScreenPos();
@@ -1431,7 +1414,11 @@ int main() {
                     glm::vec3 wo(V[3]);
                     std::snprintf(buf, sizeof(buf), "world origin is now at: (%.2f, %.2f, %.2f)", wo.x, wo.y, wo.z);
                     std::vector<std::string> lines = {"Camera and floor: fixed.  World: moves by V = C^-1.", buf};
-                    if (opt.warp > 0.001f) {
+                    if (!ev.hasProjection) {
+                        lines.push_back("No projection: clip = V * M * v and w stays 1,");
+                        lines.push_back("so the divide does nothing and nothing shrinks.");
+                        lines.push_back("Only the box [-1, 1] around the camera is drawn.");
+                    } else if (warp > 0.001f) {
                         lines.push_back("x and y are divided by w (the distance), so far things shrink");
                         lines.push_back("the frustum becomes the cube [-1, 1]; only what is inside is drawn");
                     }
@@ -1447,8 +1434,15 @@ int main() {
                         ImGui::GetWindowDrawList()->AddText(ImVec2(at.x + 4, at.y - 6), col, text);
                     };
                     label({0, -0.5f, 0.4f}, "camera (never moves)", IM_COL32(255, 220, 90, 255));
-                    if (opt.warp > 0.05f) {
-                        ImU32 col = IM_COL32(255, 255, 255, (int)(255 * opt.warp));
+                    if (!ev.hasProjection) {
+                        ImU32 col = IM_COL32(255, 255, 255, 255);
+                        // x on the top front edge, y on the right front edge, z on the bottom left edge.
+                        label({-1, 1, -1}, "x=-1", col);  label({1, 1, -1}, "x=+1  y=+1", col);
+                        label({1, -1, -1}, "y=-1", col);
+                        label({-1, -1, -1}, "z=-1: depth 0, in front", col);
+                        label({-1, -1, 1}, "z=+1: depth 1, behind the camera", col);
+                    } else if (cubeAlpha > 0.05f) {
+                        ImU32 col = IM_COL32(255, 255, 255, (int)(255 * cubeAlpha));
                         auto cube = [&](float x, float y, float z) { return glm::vec3(cubeToEye * glm::vec4(x, y, z, 1)); };
                         // x and y ticks on the far face, z ticks along the bottom-right edge.
                         label(cube(-1, -1, 1), "x=-1", col);   label(cube(0, -1, 1), "x=0", col);
@@ -1488,9 +1482,16 @@ int main() {
                     ImVec2 pos = ImGui::GetCursorScreenPos();
                     bool active, hovered;
                     ShowViewport("##camera", cameraFbo, size, &active, &hovered);
-                    std::snprintf(buf, sizeof(buf), "fov %.0f   near %.2f   far %.1f   aspect %.2f",
-                                  ev.fovDeg, ev.nearPlane, ev.farPlane, ev.aspect);
-                    Overlay(pos, {"Identical pillars: the far ones look smaller.", buf});
+                    if (ev.hasProjection) {
+                        std::snprintf(buf, sizeof(buf), "fov %.0f   near %.2f   far %.1f   aspect %.2f",
+                                      ev.fovDeg, ev.nearPlane, ev.farPlane, ev.aspect);
+                        Overlay(pos, {"Perspective: far objects look smaller.", buf});
+                    } else {
+                        Overlay(pos, {"No projection: P = identity, so clip = V * M * v.",
+                                      "Only x, y, z in [-1, 1] around the camera is visible.",
+                                      "Nothing shrinks, the image stretches to the window,",
+                                      "and depth is reversed: farther things draw on top."});
+                    }
                 }
             }
             }
