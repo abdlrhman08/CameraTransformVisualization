@@ -17,6 +17,14 @@ transforms with a node graph, and three views show the same scene:
 3. **What the camera sees.** The final image, `clip = P * V * M * vertex`.
 
 Windows 1 and 2 can be orbited by dragging and zoomed with the mouse wheel.
+
+**Play mode.** Press **Play** in "What the camera sees" to fly the camera:
+WASD moves, Q/E go down/up, Shift is faster, dragging the image looks around,
+and Esc or **Stop** ends it. Every move is written back into the node graph,
+so the other windows and the Camera node's fields follow. The View chain must
+start with a Camera or a Matrix node; transforms after it keep working. With
+nothing on the View pin, a Camera node is created and linked. Spinning nodes
+pause while you fly.
 Things the camera can't see are dimmed.
 
 **No projection.** If nothing is connected to the Projection pin, P is the
@@ -35,6 +43,12 @@ on the docking targets to split, tab or float it. The layout is saved in
 `imgui.ini`, in the folder you run the app from, and restored on the next
 start.
 
+- Drag a window outside the app and it becomes its own OS window, which you
+  can put on another monitor. Drag it back onto the app to dock it again. On
+  Linux the app runs on X11 (XWayland on a Wayland desktop), because this
+  ImGui version can't place separate windows on Wayland.
+- **H** toggles the explanations on the views and **L** toggles the labels
+  in the 3D scene. Both are also in the View menu and in Settings.
 - The **View** menu shows or hides each window. **View > Reset layout**
   restores the default arrangement.
 - The **Graph** menu loads the starter example or starts an empty graph.
@@ -43,7 +57,7 @@ start.
 
 The app uses the docking branch of Dear ImGui, pinned to `v1.90.9-docking`.
 
-The dark theme and its colors are set in `ApplyDarkTheme` in `main.cpp`. The
+The dark theme and its colors are set in `ApplyDarkTheme` in `src/UI.cpp`. The
 UI font is Roboto and the matrices use Cousine, a monospace font. Both ship
 with Dear ImGui, and the build copies them into a `fonts` folder next to the
 executable. If they can't be found, the app falls back to ImGui's built-in font.
@@ -65,6 +79,13 @@ Projection ────────────────────► MVP O
 - The camera chain builds the camera's pose `C`. The Output node inverts it to
   get `V`. Put a Rotate Y after the Camera to orbit it around the world origin.
 - Rotate nodes have a **spin** option to animate them.
+- The **Matrix** node holds any 4×4 matrix, typed row by row as written on
+  paper, with Identity, Transpose and Invert buttons. It works anywhere:
+  - in an object chain, as part of M. On its own it is drawn as a cube.
+  - in the camera chain, or on its own on the View pin, as the camera pose C.
+  - on the Projection pin as P, or after a Projection node to modify it.
+  The camera volume and near/far are worked out from P itself, so the views
+  stay correct for any invertible matrix.
 - An output pin can feed several nodes, so chains can share transforms.
 - Title bars are colored by chain: blue for model, orange for camera, purple
   for projection. Red means the chain is invalid, for example a cycle.
@@ -83,9 +104,21 @@ Projection ────────────────────► MVP O
 
 ## Files
 
-- `NodeGraph.h` holds the node and link data model and the graph evaluation.
-- `main.cpp` holds the window, the shaders, the rendering of the three views
-  and the node editor UI.
+All the code is in `src/`:
+
+| File | What's in it |
+|---|---|
+| `main.cpp` | Window and ImGui setup, menu bar, docking, the frame loop |
+| `NodeGraph.h/.cpp` | Node and link data model, chain evaluation, the starter example |
+| `Renderer.h/.cpp` | OpenGL: the shader, meshes and shapes, framebuffers, scene drawing, orbit camera |
+| `UI.h/.cpp` | Options, theme and fonts, widgets, window layout, Node Editor, Settings, Matrices |
+| `Views.h/.cpp` | The three 3D windows |
+
+Common changes:
+
+- **New node type:** add it to `NodeType` and `Node::RecomputeLocal` in NodeGraph, then its controls in `DrawNodeEditor` in UI.cpp.
+- **New object shape:** add a vertex builder and upload it in `Scene::Init` in Renderer.cpp, then pick it in `DrawWorld`.
+- **New window:** add its title and visibility flag in UI.h, a slot in `BuildDefaultLayout`, and a View-menu entry and draw call in main.cpp.
 
 ## One manual step: GLAD
 

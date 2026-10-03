@@ -60,8 +60,17 @@ if(NOT EXISTS "${CMAKE_SOURCE_DIR}/external/glad/src/glad.c")
   message(FATAL_ERROR "Missing external/glad — generate it from https://glad.dav1d.de/ (see README.md) and place it under external/glad/")
 endif()
 
+# ---- App sources ----
+set(APP_SOURCES
+  src/main.cpp
+  src/NodeGraph.cpp
+  src/Renderer.cpp
+  src/UI.cpp
+  src/Views.cpp
+)
+
 add_executable(gfx_node_editor
-  main.cpp
+  ${APP_SOURCES}
   ${imgui_SOURCE_DIR}/imgui.cpp
   ${imgui_SOURCE_DIR}/imgui_draw.cpp
   ${imgui_SOURCE_DIR}/imgui_tables.cpp
@@ -74,6 +83,7 @@ add_executable(gfx_node_editor
 )
 
 target_include_directories(gfx_node_editor PRIVATE
+  src
   ${imgui_SOURCE_DIR}
   ${imgui_SOURCE_DIR}/backends
   ${imnodes_SOURCE_DIR}
