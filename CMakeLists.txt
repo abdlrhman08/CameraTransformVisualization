@@ -4,6 +4,22 @@ project(gfx_node_editor LANGUAGES C CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# ---- Static C/C++ runtime ----
+# Set before any dependency is added so every target (GLFW included) agrees.
+# MSVC: /MT (/MTd in Debug) instead of the DLL runtime.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+set(USE_MSVC_RUNTIME_LIBRARY_DLL OFF CACHE BOOL "" FORCE)
+# GCC/Clang on Linux and MinGW: bundle libstdc++ and libgcc into the binary.
+# macOS is skipped: Apple doesn't support a static libc++, and the system one
+# ships with every macOS install anyway.
+if(NOT MSVC AND NOT APPLE)
+  if(MINGW)
+    add_link_options(-static)
+  else()
+    add_link_options(-static-libstdc++ -static-libgcc)
+  endif()
+endif()
+
 include(FetchContent)
 
 # ---- GLFW ----
