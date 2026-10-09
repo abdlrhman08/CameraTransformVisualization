@@ -1,9 +1,11 @@
 #include "UI.h"
 #include "NodeGraph.h"
 #include "Renderer.h"
+#include "Model.h"
 
 #include <imgui_internal.h>   // DockBuilder API
 #include <imnodes.h>
+#include <misc/cpp/imgui_stdlib.h>  // InputText for std::string
 
 #include <cmath>
 #include <cstdint>
@@ -347,6 +349,42 @@ static std::string UniqueName(NodeGraph& g, NodeType t, const char* base) {
     return count == 0 ? std::string(base) : std::string(base) + " " + std::to_string(count + 1);
 }
 
+// The Object node's controls for shape == kShapeModel: file, fit, status.
+static void DrawModelControls(Node& n) {
+    if (ImGui::Button("Open...")) {
+        std::string path = OpenModelDialog();
+        if (!path.empty()) n.modelPath = path;
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("OBJ, PLY, STL, glTF, FBX, Collada, 3DS, ...\nYou can also drop a file on the window.");
+    ImGui::SameLine();
+    ImGui::BeginDisabled(n.modelPath.empty());
+    if (ImGui::Button("Reload")) ReloadModel(n.modelPath);
+    ImGui::EndDisabled();
+    ImGui::SetNextItemWidth(190.0f);
+    // Edits a copy, applied on Enter or when the field loses focus, so a half-typed
+    // path isn't loaded on every keystroke.
+    std::string path = n.modelPath;
+    ImGui::InputTextWithHint("##path", "path to a model file", &path);
+    if (ImGui::IsItemDeactivatedAfterEdit()) n.modelPath = path;
+    ImGui::Checkbox("fit into 1x1x1", &n.fitModel);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Center the model and scale it to the size of the cube.\nOff: use the file's own units and origin.");
+
+    if (n.modelPath.empty()) { ImGui::TextDisabled("no file (drawn as a cube)"); return; }
+    ModelAsset& m = GetModel(n.modelPath);
+    if (!m.ok) {
+        ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 220.0f);
+        ImGui::TextColored(ImVec4(1.0f, 0.45f, 0.4f, 1.0f), "Can't load: %s", m.error.c_str());
+        ImGui::PopTextWrapPos();
+        return;
+    }
+    glm::vec3 size = m.boundsMax - m.boundsMin;
+    if (m.triangleCount > 0) ImGui::TextDisabled("%d triangles", m.triangleCount);
+    else ImGui::TextDisabled("%d points", m.points.count);
+    ImGui::TextDisabled("size %.3g x %.3g x %.3g", size.x, size.y, size.z);
+}
+
 void DrawNodeEditor(NodeGraph& graph, Options& opt, const EvalResult& lastEval, bool* open) {
     if (!ImGui::Begin(kWinEditor, open)) { ImGui::End(); return; }
 
@@ -492,9 +530,10 @@ void DrawNodeEditor(NodeGraph& graph, Options& opt, const EvalResult& lastEval, 
             switch (n.type) {
                 case NodeType::Object:
                 {
-                    const char* shapes[] = {"Cube", "Triangle"};
+                    const char* shapes[] = {"Cube", "Triangle", "Model file"};
                     ImGui::SetNextItemWidth(110.0f);
-                    ImGui::Combo("shape", &n.shape, shapes, 2);
+                    ImGui::Combo("shape", &n.shape, shapes, 3);
+                    if (n.shape == kShapeModel) DrawModelControls(n);
                     if (n.shape == kShapeTriangle) {
                         ImGui::TextDisabled("corners (local space)");
                         const char* names[3] = {"A", "B", "C"};
@@ -548,7 +587,7 @@ void DrawNodeEditor(NodeGraph& graph, Options& opt, const EvalResult& lastEval, 
             }
 
             ImNodes::BeginOutputAttribute(NodeGraph::OutAttr(n.id));
-            ImGui::Indent(n.type == NodeType::Object && n.shape != kShapeTriangle ? 120.0f : 150.0f);
+            ImGui::Indent(n.type == NodeType::Object && n.shape == kShapeCube ? 120.0f : 150.0f);
             ImGui::TextUnformatted("out");
             ImNodes::EndOutputAttribute();
         }

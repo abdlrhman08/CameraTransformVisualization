@@ -242,7 +242,11 @@ EvalResult NodeGraph::Evaluate() {
         inst.sourceNodeId = isObject ? src : m->id;
         inst.model = m->cumulativeMatrix;
         inst.shape = isObject ? srcNode->shape : kShapeCube;
-        if (isObject) for (int i = 0; i < 3; ++i) inst.tri[i] = srcNode->tri[i];
+        if (isObject) {
+            for (int i = 0; i < 3; ++i) inst.tri[i] = srcNode->tri[i];
+            inst.modelPath = srcNode->modelPath;
+            inst.fitModel = srcNode->fitModel;
+        }
         r.objects.push_back(inst);
     }
     if (out && r.objects.empty()) r.warnings.push_back("Nothing is connected to Model.");
@@ -355,6 +359,17 @@ static void BuildStarterGraph(NodeGraph& g) {
     place(cam, 770, 10);   place(camRot, 1030, 10);
     place(proj, 770, 225);
     place(out, 1290, 110);
+}
+
+int AddModelObject(NodeGraph& graph, const std::string& path, float gridX, float gridY) {
+    size_t slash = path.find_last_of("/\\");
+    int id = graph.AddNode(NodeType::Object, slash == std::string::npos ? path : path.substr(slash + 1));
+    Node* n = graph.FindNode(id);
+    n->shape = kShapeModel;
+    n->modelPath = path;
+    if (Node* out = graph.OutputNode()) graph.AddLink(NodeGraph::OutAttr(id), NodeGraph::InAttr(out->id));
+    ImNodes::SetNodeGridSpacePos(id, ImVec2(gridX, gridY));
+    return id;
 }
 
 void ResetGraph(NodeGraph& graph, bool starter) {

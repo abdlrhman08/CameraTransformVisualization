@@ -22,6 +22,7 @@ struct Mesh {
 
     // Creates the buffers on first use, then replaces their contents.
     void Upload(const std::vector<Vertex>& verts, GLenum drawMode, GLenum usage = GL_STATIC_DRAW);
+    void Free();  // deletes the buffers
 };
 
 // Appends one line segment (two vertices) of a single color.

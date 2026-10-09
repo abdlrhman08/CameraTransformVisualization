@@ -38,7 +38,7 @@ enum class NodeType {
 // What kind of chain a node currently belongs to (decided by its source).
 enum class ChainKind { None, Model, CameraPose, Projection, Invalid };
 
-enum ObjectShape { kShapeCube = 0, kShapeTriangle = 1 };
+enum ObjectShape { kShapeCube = 0, kShapeTriangle = 1, kShapeModel = 2 };
 
 inline bool IsTransform(NodeType t) {
     return t == NodeType::Translate || t == NodeType::RotateX || t == NodeType::RotateY ||
@@ -67,6 +67,10 @@ struct Node {
     int shape = kShapeCube;
     // Triangle corners in the object's local space (used when shape == kShapeTriangle)
     glm::vec3 tri[3] = {{-0.6f, -0.5f, 0.0f}, {0.6f, -0.5f, 0.0f}, {0.0f, 0.6f, 0.0f}};
+    // Model file (used when shape == kShapeModel). With fitModel it is centered
+    // and scaled into a 1x1x1 box, like the cube; otherwise it keeps the file's units.
+    std::string modelPath;
+    bool fitModel = true;
 
     // Camera params (initial pose, before any transforms in its chain)
     glm::vec3 camPos{0.0f, 2.0f, 7.0f};
@@ -99,6 +103,8 @@ struct ObjectInstance {
     glm::mat4 model{1.0f};
     int shape = kShapeCube;
     glm::vec3 tri[3] = {};   // triangle corners, local space
+    std::string modelPath;   // model file, for kShapeModel
+    bool fitModel = true;
 };
 
 // Everything the renderer needs, produced by NodeGraph::Evaluate.
@@ -158,6 +164,10 @@ private:
     void Resolve(Node* n, std::vector<int>& state);
     int SourceOf(Node* n);
 };
+
+// Adds an Object node showing the model file at `path`, linked to the Output's
+// Model pin (when there is an Output), at `gridPos` on the imnodes canvas.
+int AddModelObject(NodeGraph& graph, const std::string& path, float gridX, float gridY);
 
 // Replaces the whole graph: the starter example, or just an MVP Output node.
 // Also places the nodes on the imnodes canvas, so an imnodes context must exist.
