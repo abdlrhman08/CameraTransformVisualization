@@ -78,7 +78,13 @@ set(ASSIMP_INSTALL OFF CACHE BOOL "" FORCE)
 set(ASSIMP_NO_EXPORT ON CACHE BOOL "" FORCE)
 set(ASSIMP_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
 set(ASSIMP_INJECT_DEBUG_POSTFIX OFF CACHE BOOL "" FORCE)
-set(ASSIMP_BUILD_ZLIB ON CACHE BOOL "" FORCE)  # bundled zlib, so no libz.so dependency
+# Bundled zlib, so there's no libz.so dependency. macOS always ships zlib, and the
+# bundled copy doesn't compile against current macOS SDKs (it redefines fdopen).
+if(APPLE)
+  set(ASSIMP_BUILD_ZLIB OFF CACHE BOOL "" FORCE)
+else()
+  set(ASSIMP_BUILD_ZLIB ON CACHE BOOL "" FORCE)
+endif()
 set(USE_STATIC_CRT ON CACHE BOOL "" FORCE)     # MSVC: /MT, like the rest of the app
 set(ASSIMP_BUILD_ALL_IMPORTERS_BY_DEFAULT OFF CACHE BOOL "" FORCE)
 foreach(fmt OBJ PLY STL GLTF FBX COLLADA 3DS OFF 3MF X BLEND DXF LWO)
