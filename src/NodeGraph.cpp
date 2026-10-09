@@ -254,22 +254,21 @@ EvalResult NodeGraph::Evaluate() {
     // ---- View ----
     if (Node* c = out ? Upstream(ViewInAttr(out->id)) : nullptr) {
         // Any chain works as the camera pose C, e.g. a lone Matrix. A singular
-        // matrix can't be inverted into V, so it falls back to the default camera.
+        // matrix can't be inverted into V, so V falls back to the identity.
         if (c->kind == ChainKind::Invalid) {
             r.warnings.push_back("View pin: '" + c->name + "' is part of a cycle.");
         } else if (std::fabs(glm::determinant(c->cumulativeMatrix)) < 1e-8f) {
-            r.warnings.push_back("View pin: the camera pose has determinant 0, so it has no inverse V (using a default camera).");
+            r.warnings.push_back("View pin: the camera pose has determinant 0, so it has no inverse V (V = identity).");
         } else {
             r.hasCamera = true;
             r.cameraPose = c->cumulativeMatrix;
         }
     } else if (out) {
-        r.warnings.push_back("Nothing is connected to View (using a default camera).");
+        r.warnings.push_back("Nothing is connected to View: no camera, V = identity.");
     }
-    if (!r.hasCamera) {
-        Node def; def.type = NodeType::Camera;
-        r.cameraPose = def.CameraBasePose();
-    }
+    // No camera: V is the identity, so camera space is world space and the view
+    // volume sits at the world origin as the canonical volume of P.
+    if (!r.hasCamera) r.cameraPose = glm::mat4(1.0f);
     r.view = glm::inverse(r.cameraPose);
 
     // ---- Projection ----

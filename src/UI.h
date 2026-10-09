@@ -73,9 +73,10 @@ inline const char* kWinCamera   = "3. What the camera sees";
 inline const char* kWinEditor   = "Node Editor";
 inline const char* kWinSettings = "Settings";
 inline const char* kWinMatrices = "Matrices";
+inline const char* kWinShader   = "Shader";
 
 struct WindowVisibility {
-    bool think = true, actual = true, camera = true, editor = true, settings = true, matrices = true;
+    bool think = true, actual = true, camera = true, editor = true, settings = true, matrices = true, shader = true;
 };
 
 // Three views on top, node editor below, Settings + Matrices tabbed to its right.
@@ -86,3 +87,5 @@ extern const char* kControlsHelp;  // Help menu and the node editor's (?) toolti
 void DrawNodeEditor(NodeGraph& graph, Options& opt, const EvalResult& lastEval, bool* open);
 void DrawSettingsWindow(Options& opt, bool* open);
 void DrawMatricesWindow(NodeGraph& graph, const EvalResult& ev, bool* open);
+// The minimal vertex shader (M, V, P and gl_Position), written from what the graph connects.
+void DrawShaderWindow(NodeGraph& graph, const EvalResult& ev, bool* open);

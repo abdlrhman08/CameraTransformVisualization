@@ -61,6 +61,7 @@ static void DrawMenuBar(GLFWwindow* window, NodeGraph& graph, Options& opt, Wind
         ImGui::MenuItem(kWinEditor, nullptr, &win.editor);
         ImGui::MenuItem(kWinSettings, nullptr, &win.settings);
         ImGui::MenuItem(kWinMatrices, nullptr, &win.matrices);
+        ImGui::MenuItem(kWinShader, nullptr, &win.shader);
         ImGui::Separator();
         ImGui::MenuItem("Explanations on the views", "H", &opt.showHints);
         ImGui::MenuItem("Labels in the 3D scene", "L", &opt.showLabels);
@@ -205,6 +206,7 @@ int main(int argc, char** argv) {
         if (win.actual) actualView.Draw(ctx, &win.actual);
         if (win.camera) cameraView.Draw(ctx, &win.camera);
         if (win.matrices) DrawMatricesWindow(graph, ev, &win.matrices);
+        if (win.shader) DrawShaderWindow(graph, ev, &win.shader);
 
         // Present.
         ImGui::Render();

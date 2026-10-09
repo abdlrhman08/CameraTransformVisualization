@@ -111,7 +111,7 @@ struct ObjectInstance {
 struct EvalResult {
     std::vector<ObjectInstance> objects;
     bool hasOutput = false;
-    bool hasCamera = false;
+    bool hasCamera = false;      // false: nothing (usable) on View, so C = V = identity
     bool hasProjection = false;  // false: nothing connected, P is the identity
     bool customProjection = false;  // P comes from anything other than a lone Projection node
     bool perspective = false;    // P puts depth into w, so the divide changes x and y

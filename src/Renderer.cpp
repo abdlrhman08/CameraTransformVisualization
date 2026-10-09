@@ -379,16 +379,20 @@ void DrawWorld(Renderer& r, Scene& s, const EvalResult& ev, const glm::mat4& wor
     }
 }
 
-void DrawCameraGizmo(Renderer& r, Scene& s, const glm::mat4& camToScene, bool warpFrustum) {
-    DrawOpts body; body.tint = glm::vec3(0.25f, 0.25f, 0.3f); body.tintAmount = 0.85f; body.warp = false; body.dim = false;
-    r.Draw(s.cube, camToScene * glm::translate(glm::mat4(1.0f), {0, 0, 0.3f}) * glm::scale(glm::mat4(1.0f), {0.4f, 0.3f, 0.5f}), body);
-    DrawOpts lens = body; lens.tint = glm::vec3(1.0f, 0.85f, 0.2f); lens.tintAmount = 0.9f;
-    r.Draw(s.cube, camToScene * glm::scale(glm::mat4(1.0f), {0.18f, 0.18f, 0.12f}), lens);
+void DrawCameraGizmo(Renderer& r, Scene& s, const glm::mat4& camToScene, bool warpFrustum, bool withBody) {
+    if (withBody) {
+        DrawOpts body; body.tint = glm::vec3(0.25f, 0.25f, 0.3f); body.tintAmount = 0.85f; body.warp = false; body.dim = false;
+        r.Draw(s.cube, camToScene * glm::translate(glm::mat4(1.0f), {0, 0, 0.3f}) * glm::scale(glm::mat4(1.0f), {0.4f, 0.3f, 0.5f}), body);
+        DrawOpts lens = body; lens.tint = glm::vec3(1.0f, 0.85f, 0.2f); lens.tintAmount = 0.9f;
+        r.Draw(s.cube, camToScene * glm::scale(glm::mat4(1.0f), {0.18f, 0.18f, 0.12f}), lens);
+    }
 
     DrawOpts fr; fr.dim = false; fr.warp = warpFrustum;
-    r.Draw(s.frustum, camToScene, fr, 0, kFrustumWarpable);
-    fr.warp = false;
-    r.Draw(s.frustum, camToScene, fr, kFrustumWarpable);
+    r.Draw(s.frustum, camToScene, fr, 0, kFrustumWarpable);   // the volume's edges
+    if (withBody) {                                           // eye lines and the "up" tick
+        fr.warp = false;
+        r.Draw(s.frustum, camToScene, fr, kFrustumWarpable);
+    }
 }
 
 glm::mat4 OrbitCamera::View() const {

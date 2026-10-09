@@ -110,7 +110,8 @@ void DrawWorld(Renderer& r, Scene& s, const EvalResult& ev, const glm::mat4& wor
                DrawOpts base = {}, bool drawGrid = true, bool drawAxes = true);
 
 // Camera body + frustum. `camToScene` places the camera in scene space.
-void DrawCameraGizmo(Renderer& r, Scene& s, const glm::mat4& camToScene, bool warpFrustum);
+// Without `body`, only the edges of the view volume are drawn (no camera).
+void DrawCameraGizmo(Renderer& r, Scene& s, const glm::mat4& camToScene, bool warpFrustum, bool body = true);
 
 // ---------------------------------------------------------------------------
 // Observer camera for views 1 and 2: drag to orbit, scroll to zoom.

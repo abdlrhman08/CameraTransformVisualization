@@ -35,7 +35,7 @@ void ThinkView::Draw(FrameContext& ctx, bool* open) {
         vs.bg = kThinkBg;
         ctx.renderer.Begin(fbo, vs);
         DrawWorld(ctx.renderer, ctx.scene, ev, glm::mat4(1.0f));
-        DrawCameraGizmo(ctx.renderer, ctx.scene, C, false);
+        DrawCameraGizmo(ctx.renderer, ctx.scene, C, false, ev.hasCamera);
         ctx.renderer.End();
 
         ImVec2 pos = ImGui::GetCursorScreenPos();
@@ -45,7 +45,10 @@ void ThinkView::Draw(FrameContext& ctx, bool* open) {
         char buf[160];
         glm::vec3 cp(C[3]);
         std::snprintf(buf, sizeof(buf), "camera position: (%.2f, %.2f, %.2f)", cp.x, cp.y, cp.z);
-        if (ctx.opt.showHints) Overlay(pos, {"World: fixed.  Camera: moves by C.", buf, "drag: orbit   wheel: zoom"});
+        if (ctx.opt.showHints) {
+            if (ev.hasCamera) Overlay(pos, {"World: fixed.  Camera: moves by C.", buf, "drag: orbit   wheel: zoom"});
+            else Overlay(pos, {"No camera: V = identity.", "Only the canonical view volume of P is shown.", "drag: orbit   wheel: zoom"});
+        }
     }
     ImGui::End();
 }
@@ -113,7 +116,10 @@ void ActualView::Draw(FrameContext& ctx, bool* open) {
     float cubeAlpha = ev.hasProjection ? warp : 1.0f;
     DrawOpts floor; floor.warp = false; floor.dim = false;
     floor.tint = glm::vec3(0.22f, 0.3f, 0.45f); floor.tintAmount = 0.75f;
-    renderer.Draw(scene.grid, glm::translate(glm::mat4(1.0f), {0, -vs.boxHalf - 0.01f, -vs.boxCenter}), floor);
+    // The floor sits level with the bottom of the [-1, 1] cube as it is drawn here,
+    // centred under it: the cube's (0, -1, 0) point mapped by cubeToEye.
+    glm::vec3 floorAt(cubeToEye * glm::vec4(0.0f, -1.0f, 0.0f, 1.0f));
+    renderer.Draw(scene.grid, glm::translate(glm::mat4(1.0f), {0.0f, floorAt.y - 0.01f, floorAt.z}), floor);
 
     // The [-1,1] cube fades in as the divide is applied.
     if (cubeAlpha > 0.001f) {
@@ -130,7 +136,7 @@ void ActualView::Draw(FrameContext& ctx, bool* open) {
         glPolygonMode(GL_FRONT_AND_BACK, GL_FILL);
     }
     DrawWorld(renderer, scene, ev, ev.view, {}, false);  // the world, moved by V (its floor grid is left out)
-    DrawCameraGizmo(renderer, scene, glm::mat4(1.0f), true);
+    DrawCameraGizmo(renderer, scene, glm::mat4(1.0f), true, ev.hasCamera);
     renderer.End();
 
     // ---- show + overlays ----
@@ -142,7 +148,9 @@ void ActualView::Draw(FrameContext& ctx, bool* open) {
     char buf[160];
     glm::vec3 wo(ev.view[3]);
     std::snprintf(buf, sizeof(buf), "world origin is now at: (%.2f, %.2f, %.2f)", wo.x, wo.y, wo.z);
-    std::vector<std::string> lines = {"Camera and floor: fixed.  World: moves by V = C^-1.", buf};
+    std::vector<std::string> lines = ev.hasCamera
+        ? std::vector<std::string>{"Camera and floor: fixed.  World: moves by V = C^-1.", buf}
+        : std::vector<std::string>{"No camera: V = identity, the world is not moved.", "Only the canonical view volume of P is shown."};
     if (!ev.hasProjection) {
         lines.push_back("No projection: clip = V * M * v and w stays 1,");
         lines.push_back("so the divide does nothing and nothing shrinks.");
@@ -156,7 +164,7 @@ void ActualView::Draw(FrameContext& ctx, bool* open) {
     auto label = [&](glm::vec3 p, const char* text, ImU32 col) {
         if (opt.showLabels) Label3D(obsVP, pos, size, p, text, col);
     };
-    label({0, -0.5f, 0.4f}, "camera (never moves)", IM_COL32(255, 220, 90, 255));
+    if (ev.hasCamera) label({0, -0.5f, 0.4f}, "camera (never moves)", IM_COL32(255, 220, 90, 255));
     if (!ev.hasProjection) {
         ImU32 col = IM_COL32(255, 255, 255, 255);
         // x on the top front edge, y on the right front edge, z on the bottom left edge.

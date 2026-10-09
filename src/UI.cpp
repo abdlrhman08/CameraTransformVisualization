@@ -267,6 +267,7 @@ void BuildDefaultLayout(ImGuiID dockId) {
     ImGui::DockBuilderDockWindow(kWinEditor, editor);
     ImGui::DockBuilderDockWindow(kWinSettings, side);
     ImGui::DockBuilderDockWindow(kWinMatrices, side);
+    ImGui::DockBuilderDockWindow(kWinShader, side);
     ImGui::DockBuilderFinish(dockId);
 }
 
@@ -727,3 +728,86 @@ void DrawMatricesWindow(NodeGraph& graph, const EvalResult& ev, bool* open) {
     ImGui::End();
 }
 
+
+// ---------------------------------------------------------------------------
+// Shader window: the minimal MVP vertex shader, written from the current graph
+// ---------------------------------------------------------------------------
+// The chain feeding `end`, as a product in multiplication order, e.g.
+// "Translate * Rotate Y". Object nodes are left out because they add no matrix.
+static std::string ChainProduct(NodeGraph& graph, Node* end) {
+    std::vector<std::string> names;
+    for (Node* n = end; n && names.size() < 64; ) {
+        if (n->type != NodeType::Object) names.push_back(n->name);
+        if (!IsTransform(n->type)) break;
+        n = graph.Upstream(NodeGraph::InAttr(n->id));
+    }
+    std::string out;
+    for (size_t i = 0; i < names.size(); ++i) out += (i ? " * " : "") + names[i];
+    return out.empty() ? "identity" : out;
+}
+
+void DrawShaderWindow(NodeGraph& graph, const EvalResult& ev, bool* open) {
+    if (!ImGui::Begin(kWinShader, open)) { ImGui::End(); return; }
+
+    // Build the shader text from what is connected to the MVP Output.
+    struct Line { std::string code, comment; };
+    std::vector<Line> lines;
+    lines.push_back({"#version 330 core", ""});
+    lines.push_back({"layout(location = 0) in vec3 aPos;", ""});
+    lines.push_back({"", ""});
+
+    Node* out = graph.OutputNode();
+    bool hasModel = out && !ev.objects.empty();
+    if (hasModel) {
+        // One comment line per object chain linked to the Model pin.
+        bool first = true;
+        for (Node* end : graph.AllUpstream(NodeGraph::InAttr(out->id))) {
+            if (end->kind == ChainKind::Invalid) continue;
+            Node* src = end;
+            while (IsTransform(src->type)) {
+                Node* up = graph.Upstream(NodeGraph::InAttr(src->id));
+                if (!up) break;
+                src = up;
+            }
+            std::string who = src->type == NodeType::Object ? src->name + ": " : "";
+            lines.push_back({first ? "uniform mat4 M;" : "               ", "  // " + who + ChainProduct(graph, end)});
+            first = false;
+        }
+    }
+
+    Node* view = out ? graph.Upstream(NodeGraph::ViewInAttr(out->id)) : nullptr;
+    if (ev.hasCamera && view) lines.push_back({"uniform mat4 V;", "  // inverse(" + ChainProduct(graph, view) + ")"});
+    Node* proj = out ? graph.Upstream(NodeGraph::ProjInAttr(out->id)) : nullptr;
+    if (ev.hasProjection && proj) lines.push_back({"uniform mat4 P;", "  // " + ChainProduct(graph, proj)});
+
+    if (!lines.back().code.empty()) lines.push_back({"", ""});  // no double blank when there are no uniforms
+    lines.push_back({"void main() {", ""});
+    // Only the matrices that are connected appear in the product.
+    std::string product;
+    if (ev.hasProjection) product += "P * ";
+    if (ev.hasCamera) product += "V * ";
+    if (hasModel) product += "M * ";
+    lines.push_back({"  gl_Position = " + product + "vec4(aPos, 1.0);", ""});
+    lines.push_back({"}", ""});
+
+    // Draw it: declarations blue, the gl_Position line green, comments grey.
+    const ImVec4 codeCol = Hex(0xD8DCE3), commentCol = Hex(0x6F7888), keyCol = Hex(0x9BB1FF), mainCol = Hex(0x7EE0A0);
+    if (gMonoFont) ImGui::PushFont(gMonoFont);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.0f, 2.0f));
+    ImGui::PushStyleColor(ImGuiCol_ChildBg, Hex(0x0B0C10));
+    ImGui::BeginChild("##code", ImVec2(0, 0), ImGuiChildFlags_Border, ImGuiWindowFlags_HorizontalScrollbar);
+    for (const Line& l : lines) {
+        bool isMain = l.code.find("gl_Position") != std::string::npos;
+        bool isDecl = l.code.rfind("uniform", 0) == 0 || l.code.rfind("layout", 0) == 0 || l.code.rfind("#version", 0) == 0;
+        ImGui::TextColored(isMain ? mainCol : isDecl ? keyCol : codeCol, "%s", l.code.empty() ? " " : l.code.c_str());
+        if (!l.comment.empty()) {
+            ImGui::SameLine(0.0f, 0.0f);
+            ImGui::TextColored(commentCol, "%s", l.comment.c_str());
+        }
+    }
+    ImGui::EndChild();
+    ImGui::PopStyleColor();
+    ImGui::PopStyleVar();
+    if (gMonoFont) ImGui::PopFont();
+    ImGui::End();
+}
