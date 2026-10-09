@@ -73,7 +73,8 @@ Projection ────────────────────► MVP O
 
 - The editor starts with only the **MVP Output** node. **Graph > Load starter
   example** builds a ready-made scene.
-- An **Object** is a unit cube or a flat orange triangle. Pick the shape on the node.
+- An **Object** is a unit cube, a flat orange triangle, or a **model file**.
+  Pick the shape on the node. See [Loading models](#loading-models).
 - Chains read in **data-flow order**. `Object -> Rotate -> Translate` rotates
   the object first and then moves it, so `M = T * R`.
 - The camera chain builds the camera's pose `C`. The Output node inverts it to
@@ -102,6 +103,28 @@ Projection ────────────────────► MVP O
 - "Reset..." replaces the graph with the starter example or an empty graph.
 - Drag on empty canvas to box-select. Ctrl+click a link to detach it.
 
+## Loading models
+
+Objects can show a 3D model file: OBJ, PLY (meshes and point clouds), STL,
+glTF/GLB, FBX, Collada (DAE), 3DS, OFF, 3MF, DirectX X, Blender, DXF and
+LightWave. The files are read with [Assimp](https://github.com/assimp/assimp).
+
+- **File > Open model...** (Ctrl+O), dropping files on the window, or passing
+  them on the command line (`gfx_node_editor bunny.ply teapot.obj`) adds an
+  Object node for each file, already linked to the MVP Output.
+- Or set an Object's shape to **Model file** and use **Open...**, or type a path
+  and press Enter. **Reload** reads the file again after you change it.
+- **Fit into 1x1x1** (on by default) centers the model and scales it to the size
+  of the cube, so models of any size show up like the other objects. Turn it off
+  to keep the file's own units and origin.
+- Vertex colors and material colors are used when the file has them. The views
+  are unlit, so a simple fixed light is baked into the colors to show the shape.
+- A file that can't be read is drawn as a cube, and the node says why.
+- On Linux the Open dialog needs `zenity` or `kdialog`. Without them, type the
+  path or drop the file.
+
+To support another format, add it to the importer list in `CMakeLists.txt`.
+
 ## Files
 
 All the code is in `src/`:
@@ -111,6 +134,7 @@ All the code is in `src/`:
 | `main.cpp` | Window and ImGui setup, menu bar, docking, the frame loop |
 | `NodeGraph.h/.cpp` | Node and link data model, chain evaluation, the starter example |
 | `Renderer.h/.cpp` | OpenGL: the shader, meshes and shapes, framebuffers, scene drawing, orbit camera |
+| `Model.h/.cpp` | Loading model files with Assimp, the model cache, the Open dialog |
 | `UI.h/.cpp` | Options, theme and fonts, widgets, window layout, Node Editor, Settings, Matrices |
 | `Views.h/.cpp` | The three 3D windows |
 
@@ -143,6 +167,7 @@ cmake --build build -j
 ./build/gfx_node_editor
 ```
 
-The first configure clones GLFW, ImGui, imnodes and GLM, so it takes a while.
+The first configure clones GLFW, ImGui, imnodes, GLM, Assimp and
+portable-file-dialogs, and Assimp takes a few minutes to compile.
 If your shell sets `CMAKE_GENERATOR`, always configure a given build folder
 with the same generator, or delete the folder and start over.

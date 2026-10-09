@@ -65,6 +65,50 @@ if(NOT imnodes_POPULATED)
   FetchContent_Populate(imnodes)
 endif()
 
+# ---- Assimp: model loading (OBJ, PLY, STL, glTF, FBX, ...) ----
+# Built as a static library with only the importers below, so the build stays
+# reasonably quick. To support another format, add its ASSIMP_BUILD_<NAME>_IMPORTER.
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_TESTS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_ASSIMP_TOOLS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_ASSIMP_VIEW OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_SAMPLES OFF CACHE BOOL "" FORCE)
+set(ASSIMP_BUILD_DOCS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_INSTALL OFF CACHE BOOL "" FORCE)
+set(ASSIMP_NO_EXPORT ON CACHE BOOL "" FORCE)
+set(ASSIMP_WARNINGS_AS_ERRORS OFF CACHE BOOL "" FORCE)
+set(ASSIMP_INJECT_DEBUG_POSTFIX OFF CACHE BOOL "" FORCE)
+# Bundled zlib, so there's no libz.so dependency. macOS always ships zlib, and the
+# bundled copy doesn't compile against current macOS SDKs (it redefines fdopen).
+if(APPLE)
+  set(ASSIMP_BUILD_ZLIB OFF CACHE BOOL "" FORCE)
+else()
+  set(ASSIMP_BUILD_ZLIB ON CACHE BOOL "" FORCE)
+endif()
+set(USE_STATIC_CRT ON CACHE BOOL "" FORCE)     # MSVC: /MT, like the rest of the app
+set(ASSIMP_BUILD_ALL_IMPORTERS_BY_DEFAULT OFF CACHE BOOL "" FORCE)
+foreach(fmt OBJ PLY STL GLTF FBX COLLADA 3DS OFF 3MF X BLEND DXF LWO)
+  set(ASSIMP_BUILD_${fmt}_IMPORTER ON CACHE BOOL "" FORCE)
+endforeach()
+FetchContent_Declare(
+  assimp
+  GIT_REPOSITORY https://github.com/assimp/assimp.git
+  GIT_TAG v6.0.5
+  GIT_SHALLOW TRUE
+)
+FetchContent_MakeAvailable(assimp)
+
+# ---- portable-file-dialogs: native "Open file" dialog (header only) ----
+FetchContent_Declare(
+  pfd
+  GIT_REPOSITORY https://github.com/samhocevar/portable-file-dialogs.git
+  GIT_TAG c12ea8c9a727f5320a2b4570aee863bbede2a204
+)
+FetchContent_GetProperties(pfd)
+if(NOT pfd_POPULATED)
+  FetchContent_Populate(pfd)
+endif()
+
 # ---- GLAD loader ----
 # Not fetched automatically: generate it yourself at https://glad.dav1d.de/
 #   Language: C/C++, Specification: OpenGL, API gl: Version 3.3, Profile: Core
@@ -79,6 +123,7 @@ endif()
 # ---- App sources ----
 set(APP_SOURCES
   src/main.cpp
+  src/Model.cpp
   src/NodeGraph.cpp
   src/Renderer.cpp
   src/UI.cpp
@@ -92,6 +137,7 @@ add_executable(gfx_node_editor
   ${imgui_SOURCE_DIR}/imgui_tables.cpp
   ${imgui_SOURCE_DIR}/imgui_widgets.cpp
   ${imgui_SOURCE_DIR}/imgui_demo.cpp
+  ${imgui_SOURCE_DIR}/misc/cpp/imgui_stdlib.cpp
   ${imgui_SOURCE_DIR}/backends/imgui_impl_glfw.cpp
   ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
   ${imnodes_SOURCE_DIR}/imnodes.cpp
@@ -103,10 +149,11 @@ target_include_directories(gfx_node_editor PRIVATE
   ${imgui_SOURCE_DIR}
   ${imgui_SOURCE_DIR}/backends
   ${imnodes_SOURCE_DIR}
+  ${pfd_SOURCE_DIR}
   external/glad/include
 )
 
-target_link_libraries(gfx_node_editor PRIVATE glfw glm::glm)
+target_link_libraries(gfx_node_editor PRIVATE glfw glm::glm assimp::assimp)
 
 # ---- Fonts ----
 # Roboto (UI) and Cousine (monospace, for matrices) ship with Dear ImGui.
@@ -121,7 +168,7 @@ add_custom_command(TARGET gfx_node_editor POST_BUILD
 )
 
 if(WIN32)
-  target_link_libraries(gfx_node_editor PRIVATE opengl32)
+  target_link_libraries(gfx_node_editor PRIVATE opengl32 comdlg32 ole32 shell32)
 elseif(APPLE)
   target_link_libraries(gfx_node_editor PRIVATE "-framework OpenGL")
 else()

@@ -1,5 +1,6 @@
 #include "Renderer.h"
 #include "NodeGraph.h"
+#include "Model.h"
 
 #include <cmath>
 #include <cstdio>
@@ -140,6 +141,13 @@ void Mesh::Upload(const std::vector<Vertex>& verts, GLenum drawMode, GLenum usag
     glBindVertexArray(0);
     count = (int)verts.size();
     mode = drawMode;
+}
+
+void Mesh::Free() {
+    if (vbo) glDeleteBuffers(1, &vbo);
+    if (vao) glDeleteVertexArrays(1, &vao);
+    vao = vbo = 0;
+    count = 0;
 }
 
 void PushLine(std::vector<Vertex>& v, glm::vec3 a, glm::vec3 b, glm::vec3 c) {
@@ -355,6 +363,16 @@ void DrawWorld(Renderer& r, Scene& s, const EvalResult& ev, const glm::mat4& wor
         if (o.shape == kShapeTriangle) {
             s.triangle.Upload(TriangleVerts(o.tri), GL_TRIANGLES, GL_DYNAMIC_DRAW);
             r.Draw(s.triangle, worldToScene * o.model, base);
+        } else if (o.shape == kShapeModel) {
+            // A model that is missing or failed to load is drawn as a cube.
+            ModelAsset* m = o.modelPath.empty() ? nullptr : &GetModel(o.modelPath);
+            if (!m || !m->ok) { r.Draw(s.cube, worldToScene * o.model, base); continue; }
+            glm::mat4 model = worldToScene * o.model * (o.fitModel ? m->fit : glm::mat4(1.0f));
+            r.Draw(m->triangles, model, base);
+            r.Draw(m->lines, model, base);
+            glPointSize(2.0f);
+            r.Draw(m->points, model, base);
+            glPointSize(1.0f);
         } else {
             r.Draw(s.cube, worldToScene * o.model, base);
         }
