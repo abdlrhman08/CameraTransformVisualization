@@ -12,11 +12,23 @@ set(USE_MSVC_RUNTIME_LIBRARY_DLL OFF CACHE BOOL "" FORCE)
 # GCC/Clang on Linux and MinGW: bundle libstdc++ and libgcc into the binary.
 # macOS is skipped: Apple doesn't support a static libc++, and the system one
 # ships with every macOS install anyway.
+# Some distros (Fedora: libstdc++-static) don't install the static libstdc++ by
+# default. Without it, the runtime is linked dynamically instead of failing.
 if(NOT MSVC AND NOT APPLE)
   if(MINGW)
     add_link_options(-static)
   else()
-    add_link_options(-static-libstdc++ -static-libgcc)
+    include(CheckCXXSourceCompiles)
+    set(CMAKE_REQUIRED_LINK_OPTIONS -static-libstdc++ -static-libgcc)
+    check_cxx_source_compiles("#include <string>\nint main() { return (int)std::string(\"x\").size() - 1; }"
+                              MVP_HAS_STATIC_LIBSTDCXX)
+    unset(CMAKE_REQUIRED_LINK_OPTIONS)
+    if(MVP_HAS_STATIC_LIBSTDCXX)
+      add_link_options(-static-libstdc++ -static-libgcc)
+    else()
+      message(WARNING "No static libstdc++ found (Fedora: dnf install libstdc++-static). "
+                      "Linking the C++ runtime dynamically.")
+    endif()
   endif()
 endif()
 
