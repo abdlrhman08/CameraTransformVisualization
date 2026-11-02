@@ -21,7 +21,9 @@ void ThinkView::Draw(FrameContext& ctx, bool* open) {
     const EvalResult& ev = ctx.ev;
     const glm::mat4& C = ev.cameraPose;
 
-    if (ctx.opt.showHints) ImGui::TextWrapped("The world stays still. The camera (pose C) moves through it.");
+    if (ctx.opt.showHints)
+        ImGui::TextWrapped("%s", ev.stepsActive ? "The projection, built step by step: the world turns and flattens onto the view plane."
+                                                : "The world stays still. The camera (pose C) moves through it.");
     ImVec2 size = ImGui::GetContentRegionAvail();
     fbo.Resize((int)size.x, (int)size.y);
     if (fbo.Valid() && size.x > 1 && size.y > 1) {
@@ -34,7 +36,18 @@ void ThinkView::Draw(FrameContext& ctx, bool* open) {
         vs.nearPlane = ev.nearPlane; vs.farPlane = ev.farPlane;
         vs.bg = kThinkBg;
         ctx.renderer.Begin(fbo, vs);
-        DrawWorld(ctx.renderer, ctx.scene, ev, glm::mat4(1.0f));
+        if (ev.stepsActive) {
+            // The projection steps act on camera space: into it with V, the steps
+            // so far, and back out with C. The floor and axes stay put.
+            DrawOpts axes; axes.dim = false;
+            ctx.renderer.Draw(ctx.scene.grid, glm::mat4(1.0f));
+            ctx.renderer.Draw(ctx.scene.axes, glm::mat4(1.0f), axes);
+            DrawWorld(ctx.renderer, ctx.scene, ev, C * ev.stepsMatrix * ev.view, {}, false, false);
+            DrawOpts plane; plane.dim = false; plane.warp = false;
+            ctx.renderer.Draw(ctx.scene.viewPlane, C * ev.stepsPlane, plane);
+        } else {
+            DrawWorld(ctx.renderer, ctx.scene, ev, glm::mat4(1.0f));
+        }
         DrawCameraGizmo(ctx.renderer, ctx.scene, C, false, ev.hasCamera);
         ctx.renderer.End();
 
@@ -45,7 +58,17 @@ void ThinkView::Draw(FrameContext& ctx, bool* open) {
         char buf[160];
         glm::vec3 cp(C[3]);
         std::snprintf(buf, sizeof(buf), "camera position: (%.2f, %.2f, %.2f)", cp.x, cp.y, cp.z);
-        if (ctx.opt.showHints) {
+        if (ctx.opt.showHints && ev.stepsActive) {
+            std::vector<std::string> lines = ev.stepsLines;
+            lines.push_back("The floor stays put. Cyan: the view plane.");
+            lines.push_back(ev.animStatus);
+            lines.push_back("drag: orbit   wheel: zoom");
+            Overlay(pos, lines);
+        } else if (ctx.opt.showHints && !ev.animLines.empty()) {
+            std::vector<std::string> lines = ev.animLines;
+            lines.push_back("drag: orbit   wheel: zoom");
+            Overlay(pos, lines);
+        } else if (ctx.opt.showHints) {
             if (ev.hasCamera) Overlay(pos, {"World: fixed.  Camera: moves by C.", buf, "drag: orbit   wheel: zoom"});
             else Overlay(pos, {"No camera: V = identity.", "Only the canonical view volume of P is shown.", "drag: orbit   wheel: zoom"});
         }
@@ -203,7 +226,8 @@ void CameraView::Draw(FrameContext& ctx, bool* open) {
         ImGui::PopStyleColor();
     } else {
         ImGui::PushStyleColor(ImGuiCol_Button, IM_COL32(45, 130, 70, 255));
-        if (ImGui::Button("Play")) { playing = true; playError = nullptr; ImGui::SetWindowFocus(); }
+        // Flying writes the pose back into the graph, so no matrix may be half animated.
+        if (ImGui::Button("Play")) { playing = true; playError = nullptr; ctx.graph.StopAnimation(); ImGui::SetWindowFocus(); }
         ImGui::PopStyleColor();
     }
     if (ImGui::IsItemHovered())
@@ -240,8 +264,20 @@ void CameraView::Draw(FrameContext& ctx, bool* open) {
                                                 IM_COL32(90, 200, 120, 255), 0.0f, 0, 2.0f);
             Fly(ctx, active);
         }
+        if (!ev.animStatus.empty()) {
+            // At the bottom, so it doesn't cover the projection's own overlay.
+            float lh = ImGui::GetTextLineHeightWithSpacing();
+            Overlay(ImVec2(pos.x, pos.y + size.y - lh - 22.0f), {ev.animStatus}, IM_COL32(155, 177, 255, 255));
+        }
         if (!ctx.opt.showHints) {
             // hints hidden
+        } else if (ev.planarKind >= 0) {
+            const PlanarInfo& pi = GetPlanarInfo(ev.planarKind);
+            char buf[160];
+            std::snprintf(buf, sizeof(buf), "%s projection: %s", pi.group, pi.name);
+            Overlay(pos, {buf, pi.note, ev.perspective
+                ? "Projectors meet at the center of projection: far things shrink."
+                : "Projectors are parallel: size doesn't change with distance."});
         } else if (ev.customProjection) {
             char buf[160];
             std::snprintf(buf, sizeof(buf), "depth -1 at %.2f, depth +1 at %.2f in front of the camera", ev.nearPlane, ev.farPlane);

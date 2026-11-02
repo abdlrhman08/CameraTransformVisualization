@@ -87,6 +87,9 @@ Projection ────────────────────► MVP O
   - on the Projection pin as P, or after a Projection node to modify it.
   The camera volume and near/far are worked out from P itself, so the views
   stay correct for any invertible matrix.
+- The **Projection...** button opens a menu: the perspective node (fov, near,
+  far), or any projection of the course slides (`projections.pdf`), such as
+  front view, isometric or cavalier. See [Planar projections](#planar-projections).
 - An output pin can feed several nodes, so chains can share transforms.
 - Title bars are colored by chain: blue for model, orange for camera, purple
   for projection. Red means the chain is invalid, for example a cycle.
@@ -102,6 +105,96 @@ Projection ────────────────────► MVP O
 - "Duplicate" copies the selected nodes with their settings, but not their links.
 - "Reset..." replaces the graph with the starter example or an empty graph.
 - Drag on empty canvas to box-select. Ctrl+click a link to detach it.
+
+## Planar projections
+
+Add one with **Projection...** in the toolbar (or Projection in the right-click
+menu): below the perspective node, the menu lists the slides' planar geometric
+projections by group. The node is named after its kind, follows it when you
+switch kinds in its **kind** list, and is called a Planar Projection below:
+
+| Group | Kinds | Parameters |
+|---|---|---|
+| Multi-view | Front, Side, Top view | none |
+| Axonometric | Isometric, Dimetric, Trimetric, Axonometric | dimetric `m / n`, trimetric normal `n`, axonometric `theta` and `phi` |
+| Oblique | Cavalier (alpha = 45), Cabinet (alpha = 63.4), Oblique | `alpha` (oblique only) and the receding direction `phi` |
+| Perspective | One-point, One-point with the plane at z = 0, Two-point, Three-point | `d`, `theta`, `phi`, near and far |
+
+The node shows the slide's matrix entry for entry ("on the slides"). Most of
+those matrices drop a coordinate, so their determinant is 0, and a GPU can't
+draw them well. So by default the node sends a GPU form of the same image:
+
+- z is kept as depth, so the depth buffer can tell which surface is in front
+  (`depth +-` for parallel kinds, near/far for perspective).
+- x and y are scaled so that `window +-` of the view plane fills the screen.
+- Perspective looks down -z, like OpenGL, so `w = -z/d`. The slides look down +z.
+- Side, top, two- and three-point leave out the slides' last step, which puts
+  the image back on a plane in the world. Instead the view plane faces the screen.
+
+Tick **exact slide matrix** to send the slide's matrix as it is and see what
+goes wrong without depth.
+
+The node has an input, so the slides' derivations can be built from nodes:
+`Rotate Y (-45) -> Rotate X (35.26) -> Planar Projection (Front view)` gives
+the same P as the Isometric kind, and `Rotate Y (-theta) -> One-point` gives
+the two-point perspective.
+
+**Expand into matrices.** A kind made of several matrices has an **Expand
+into N matrices** button. It replaces the node with one existing node per
+matrix of the slides, in data-flow order, keeping its links:
+
+| Kind | Expands into |
+|---|---|
+| Isometric, dimetric, trimetric, axonometric | Rotate Y (-theta) -> Rotate X (phi) -> Front view |
+| Cavalier, cabinet, oblique | Matrix (the shear along the projectors) -> Front view |
+| Side, top (GPU form) | Rotate Y (-90) or Rotate X (90) -> Front view |
+| Two-point | Rotate Y (-theta) -> One-point |
+| Three-point | Rotate Y (-azimuth of n) -> Rotate X (elevation of n) -> One-point |
+
+The product of the chain is the same P, so the views don't change. With
+**exact slide matrix** ticked, two- and three-point expand into all of the
+slides' matrices, rotate backs included (3 and 5 nodes). Without it, the
+rotate backs are left out: they only lay the flat image back into the world,
+and on the GPU they would mix depth into x.
+
+**Animate a chain of matrices.** Select nodes (box-drag, or Ctrl+click) in
+any chains and press **Animate selected** above the canvas. Each node has its
+own **Animate** button too. The selected matrices then grow from the identity
+one after another, in pipeline order: the model chains first, then the camera
+chain, then the projection, upstream first in each chain. Matrices that are not
+selected stay as they are; selected ones that have not had their turn wait at
+the identity. The animation changes the matrices themselves, so every view
+follows it, including the camera's image in view 3, and the node readouts
+show the matrices changing.
+
+- Rotations turn by a growing angle. Other nodes (Translate, Scale, Matrix,
+  Projection, a single-matrix Planar Projection) blend from the identity to
+  their matrix, so a perspective projection fades its divide in.
+- When projection nodes are animated, view 1 also shows the projection chain
+  acting on the world: it turns, slides along the projectors onto the view
+  plane (cyan), and the floor and axes stay put as a reference.
+- The bar above the canvas has Play/Pause, a slider over all the matrices,
+  and **Stop**, which puts every matrix back. Playing needs "Play animations"
+  in Settings. Flying the camera (Play in view 3) stops the animation.
+- A Planar Projection made of several matrices has to be expanded first.
+
+**Graph > Projection examples** loads ready-made scenes:
+
+- Parallel: a few blocks around the origin and no camera, so V = identity and
+  the slides' x, y and z are the camera's.
+- Isometric step by step: the rotations and the front view as separate nodes.
+- Perspective: a camera that only moves, so the slides' center of projection
+  (COP) at the origin is the camera. The slides turn the view plane about the
+  COP, which turns the view, so the tower stands 30 degrees to the left, where
+  two- and three-point look (theta = 30): they see its corner. One-point looks
+  straight ahead, along the wall. Three-point uses phi = -25 to look up the tower.
+  A perspective projection with no camera has its COP at the world origin,
+  usually inside the objects, and the Node Editor warns about it.
+- Two-point step by step: a Rotate Y before a one-point projection.
+
+With the slides' oblique matrix, points nearer the viewer (+z) move along
+`phi`, so a cube's far side is drawn the opposite way from the slides'
+figure. `phi = 225` draws it like the figure.
 
 ## Loading models
 

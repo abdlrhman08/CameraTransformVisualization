@@ -7,9 +7,11 @@
 #include <imnodes.h>
 #include <misc/cpp/imgui_stdlib.h>  // InputText for std::string
 
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <fstream>
 #ifdef __linux__
 #include <unistd.h>
@@ -278,7 +280,8 @@ static ImU32 TitleColorFor(const Node& n) {
     switch (n.type) {
         case NodeType::Object:     return IM_COL32(40, 100, 170, 255);
         case NodeType::Camera:     return IM_COL32(185, 120, 30, 255);
-        case NodeType::Projection: return IM_COL32(125, 60, 160, 255);
+        case NodeType::Projection:
+        case NodeType::PlanarProjection: return IM_COL32(125, 60, 160, 255);
         case NodeType::Output:     return IM_COL32(40, 130, 70, 255);
         default: break;
     }
@@ -303,14 +306,36 @@ static const NodeKindInfo kTransformKinds[] = {
 static const char* NodeKindName(NodeType t) {
     for (auto& k : kSourceKinds) if (k.type == t) return k.label;
     for (auto& k : kTransformKinds) if (k.type == t) return k.label;
+    if (t == NodeType::PlanarProjection) return "Projection";
     return "MVP Output";
+}
+
+// The Projection button's menu: the perspective node (fov, near, far), or one of
+// the slides' projections. Sets `planar` to the kind picked, or -1 for the
+// perspective node, and returns true when something was picked.
+static bool ProjectionMenu(int* planar) {
+    bool picked = false;
+    if (ImGui::MenuItem("Perspective (fov, near, far)")) { *planar = -1; picked = true; }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("glm::perspective, like OpenGL programs use.");
+    const char* group = nullptr;
+    for (int k = 0; k < kPlanarCount; ++k) {
+        const PlanarInfo& info = GetPlanarInfo(k);
+        if (!group || std::strcmp(group, info.group) != 0) {
+            group = info.group;
+            ImGui::SeparatorText((std::string("Slides: ") + group).c_str());
+        }
+        if (ImGui::MenuItem(info.name)) { *planar = k; picked = true; }
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", info.note);
+    }
+    return picked;
 }
 
 static ImU32 TypeColor(NodeType t) {
     switch (t) {
         case NodeType::Object:     return IM_COL32(40, 100, 170, 255);
         case NodeType::Camera:     return IM_COL32(185, 120, 30, 255);
-        case NodeType::Projection: return IM_COL32(125, 60, 160, 255);
+        case NodeType::Projection:
+        case NodeType::PlanarProjection: return IM_COL32(125, 60, 160, 255);
         case NodeType::Output:     return IM_COL32(40, 130, 70, 255);
         default:                   return IM_COL32(75, 75, 80, 255);
     }
@@ -386,12 +411,190 @@ static void DrawModelControls(Node& n) {
     ImGui::TextDisabled("size %.3g x %.3g x %.3g", size.x, size.y, size.z);
 }
 
+// A node's own Animate button (animates just this matrix), or how far along it
+// is when it is part of the running animation.
+static void DrawAnimateControls(NodeGraph& graph, Node& n) {
+    if (graph.IsAnimated(n.id)) {
+        ImGui::TextColored(Hex(0x9BB1FF), "animating: %.0f%% of its matrix", 100.0f * n.animFraction);
+        return;
+    }
+    if (ImGui::SmallButton("Animate")) graph.StartAnimation({n.id});
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Grows this matrix from the identity, in every view.\n"
+                          "To animate a chain, select its nodes and use \"Animate selected\".");
+}
+
+// "Animate selected", then for a running animation: play / pause, a slider over
+// all its matrices, and stop.
+static void DrawAnimationBar(NodeGraph& graph, const EvalResult& ev, int numSelNodes) {
+    char label[64];
+    std::snprintf(label, sizeof(label), "Animate selected (%d)###animsel", numSelNodes);
+    if (ColoredButton(label, IM_COL32(50, 95, 160, 255), numSelNodes > 0)) {
+        std::vector<int> ids(numSelNodes);
+        ImNodes::GetSelectedNodes(ids.data());
+        graph.StartAnimation(ids);
+    }
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("Grows the selected matrices from the identity one after another,\n"
+                          "in every view: M chains first, then the camera (V), then P,\n"
+                          "upstream first. Matrices not selected stay as they are.\n"
+                          "Select with box-drag or Ctrl+click.");
+    if (graph.animNodes.empty()) {
+        ImGui::SameLine();
+        ImGui::TextDisabled("Select a chain of matrices to play them one by one.");
+        return;
+    }
+    ImGui::SameLine();
+    float count = (float)graph.animNodes.size();
+    if (ImGui::SmallButton(graph.animPlaying ? "Pause" : "Play")) {
+        if (!graph.animPlaying && graph.animT >= count) graph.animT = 0.0f;
+        graph.animPlaying = !graph.animPlaying;
+    }
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Playing needs \"Play animations\" in Settings. The slider works anyway.");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(220.0f);
+    if (ImGui::SliderFloat("##animT", &graph.animT, 0.0f, count, "%.2f")) graph.animPlaying = false;
+    ImGui::SameLine();
+    if (ImGui::SmallButton("Stop")) graph.StopAnimation();
+    if (ImGui::IsItemHovered()) ImGui::SetTooltip("Puts every matrix back to its full value.");
+    ImGui::SameLine();
+    ImGui::TextColored(Hex(0x9BB1FF), "%s", ev.animStatus.c_str());
+}
+
+// The Planar Projection node's controls: the kind, its parameters as named on
+// the slides, the window, and the slide's own matrix for comparison.
+static void DrawPlanarControls(Node& n, bool showMatrices, int* expandRequest) {
+    const PlanarInfo& info = GetPlanarInfo(n.planar);
+    ImGui::SetNextItemWidth(190.0f);
+    if (ImGui::BeginCombo("kind", info.name)) {
+        const char* group = nullptr;
+        for (int k = 0; k < kPlanarCount; ++k) {
+            const PlanarInfo& ki = GetPlanarInfo(k);
+            if (!group || std::strcmp(group, ki.group) != 0) { ImGui::SeparatorText(ki.group); group = ki.group; }
+            ImGui::PushID(k);
+            if (ImGui::Selectable(ki.name, k == n.planar)) SetPlanarKind(n, k);
+            ImGui::PopID();
+        }
+        ImGui::EndCombo();
+    }
+    ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 240.0f);
+    ImGui::TextDisabled("%s: %s", info.group, info.note);
+
+    float t, p;
+    n.PlanarAngles(t, p);
+    bool perspective = IsPlanarPerspective(n.planar);
+    switch (n.planar) {
+        case kPlanarFront: case kPlanarSide: case kPlanarTop:
+            if (n.planar != kPlanarFront) ImGui::TextDisabled("on screen: the plane turned to face you (theta %.0f, phi %.0f)", t, p);
+            break;
+        case kPlanarIsometric:
+            ImGui::TextDisabled("theta = 45, phi = atan(n / (sqrt(2) n)) = %.4f", p);
+            break;
+        case kPlanarDimetric:
+            ImGui::DragFloat("m / n", &n.dimetricRatio, 0.01f, 0.01f, 20.0f, "%.2f");
+            ImGui::TextDisabled("theta = 45, phi = atan(m / (sqrt(2) n)) = %.2f", p);
+            break;
+        case kPlanarTrimetric: {
+            ImGui::DragFloat3("normal", &n.viewNormal.x, 0.02f, 0.0f, 0.0f, "%.2f");
+            glm::vec3 a = glm::abs(n.viewNormal);
+            auto same = [](float x, float y) { return std::fabs(x - y) < 1e-3f; };
+            int equal = (same(a.x, a.y) ? 1 : 0) + (same(a.y, a.z) ? 1 : 0) + (same(a.x, a.z) ? 1 : 0);
+            ImGui::TextDisabled("theta %.2f, phi %.2f: %s", t, p,
+                                equal == 3 ? "equal parts, so isometric" : equal == 1 ? "two equal parts, so dimetric" : "trimetric");
+            break;
+        }
+        case kPlanarAxonometric:
+            ImGui::DragFloat("theta", &n.theta, 0.5f, -180.0f, 180.0f, "%.2f deg");
+            ImGui::DragFloat("phi", &n.phi, 0.5f, -90.0f, 90.0f, "%.2f deg");
+            break;
+        case kPlanarOblique:
+            ImGui::DragFloat("alpha", &n.obliqueAlpha, 0.25f, 5.0f, 90.0f, "%.2f deg");
+            ImGui::TextDisabled("lines along z at cot(alpha) = %.2f of their length",
+                                1.0f / std::tan(glm::radians(glm::clamp(n.obliqueAlpha, 1.0f, 90.0f))));
+            break;
+        case kPlanarTwoPoint:
+            ImGui::DragFloat("theta", &n.theta, 0.5f, -89.0f, 89.0f, "%.1f deg");
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("Turns the view plane about y through the COP, as on the slides,\n"
+                                  "so the view turns too and the scene moves across the image.\n"
+                                  "Lines along x and z then meet at two vanishing points. A box looks\n"
+                                  "corner-on when the turned view points at it (the example's tower).");
+            break;
+        case kPlanarThreePoint:
+            ImGui::DragFloat("theta", &n.theta, 0.5f, -89.0f, 89.0f, "%.1f deg");
+            ImGui::DragFloat("phi", &n.phi, 0.5f, -89.0f, 89.0f, "%.1f deg");
+            break;
+        default: break;
+    }
+    if (IsPlanarOblique(n.planar))
+        ImGui::DragFloat("phi##oblique", &n.obliqueAngle, 0.5f, -180.0f, 180.0f, "%.1f deg");
+    if (IsPlanarOblique(n.planar) && ImGui::IsItemHovered())
+        ImGui::SetTooltip("The direction the lines along z are drawn in on the view plane.\n"
+                          "With the slides' matrix, points nearer to you (+z) move along phi,\n"
+                          "so a cube's far side is drawn the other way. phi = 225 draws it\n"
+                          "receding up and to the right, like the slides' figure.");
+    if (perspective) {
+        ImGui::DragFloat("d", &n.viewDist, 0.01f, 0.05f, 20.0f, "%.2f");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("Distance from the center of projection (COP) to the view plane.");
+        ImGui::DragFloat("near", &n.nearPlane, 0.01f, 0.01f, 20.0f);
+        ImGui::DragFloat("far", &n.farPlane, 0.25f, 1.0f, 500.0f);
+    } else {
+        ImGui::DragFloat("depth +-", &n.depthRange, 0.5f, 0.5f, 500.0f, "%.1f");
+        if (ImGui::IsItemHovered()) ImGui::SetTooltip("How far in front of and behind the view plane is kept for the depth buffer.");
+    }
+    ImGui::DragFloat("window +-", &n.windowHalf, 0.02f, 0.05f, 100.0f, "%.2f");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Half the height of the part of the view plane that fills the screen.\n"
+                          "The width is this times the aspect (%.2f, from the camera window).", n.aspect);
+
+    ImGui::Checkbox("exact slide matrix", &n.exactSlides);
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("On: P is the slide's matrix, as is.\n"
+                          "Off: the same image in a form the GPU can draw:\n"
+                          "  - z is kept as depth, so the GPU can tell what is in front\n"
+                          "  - x and y are scaled so +-window fills [-1, 1]\n"
+                          "  - perspective looks down -z like OpenGL (the slides look down +z)\n"
+                          "  - side, top, two- and three-point leave out the slides' last step,\n"
+                          "    which lays the image back on a plane in the world,\n"
+                          "    so the view plane faces the screen");
+    if (n.exactSlides) {
+        ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "%s", perspective
+            ? "The slides look down +z and keep no depth, so OpenGL clips what is in front of the camera."
+            : "z is thrown away (det 0), so the GPU can't tell which surface is in front.");
+    } else if (showMatrices) {
+        ImGui::TextUnformatted("on the slides:");
+        MatrixText(n.PlanarSlideMatrix());
+    }
+
+    std::vector<ExpandedNode> plan = PlanarExpansion(n);
+    if (!plan.empty()) {
+        char label[64];
+        std::snprintf(label, sizeof(label), "Expand into %d matrices", (int)plan.size());
+        if (ImGui::Button(label)) *expandRequest = n.id;
+        if (ImGui::IsItemHovered()) {
+            std::string chain;
+            for (size_t i = 0; i < plan.size(); ++i) chain += (i ? "  ->  " : "") + plan[i].name;
+            ImGui::SetTooltip("Replaces this node with one node per matrix, in data-flow order:\n%s\n"
+                              "Their product is the same P. Then each one can be animated.%s",
+                              chain.c_str(),
+                              n.planar == kPlanarTwoPoint || n.planar == kPlanarThreePoint
+                                  ? (n.exactSlides ? "" : "\nThe slides' rotate back is left out: on the GPU it would mix\n"
+                                                          "depth into x. Tick \"exact slide matrix\" to keep it.")
+                                  : "");
+        }
+    } else if (n.type == NodeType::PlanarProjection && n.PlanarSteps().size() == 1) {
+        ImGui::TextDisabled("A single matrix: nothing to expand.");
+    }
+    ImGui::PopTextWrapPos();
+}
+
 void DrawNodeEditor(NodeGraph& graph, Options& opt, const EvalResult& lastEval, bool* open) {
     if (!ImGui::Begin(kWinEditor, open)) { ImGui::End(); return; }
 
     static int spawnCount = 0;           // cascades nodes added from the toolbar
     std::vector<int> nodesToDelete;      // applied after EndNodeEditor
     std::vector<int> linksToDelete;
+    int expandRequest = -1;              // a Planar Projection to expand, also after EndNodeEditor
     auto queueSelected = [&]() {
         int nl = ImNodes::NumSelectedLinks();
         if (nl > 0) { std::vector<int> ids(nl); ImNodes::GetSelectedLinks(ids.data()); linksToDelete.insert(linksToDelete.end(), ids.begin(), ids.end()); }
@@ -402,7 +605,8 @@ void DrawNodeEditor(NodeGraph& graph, Options& opt, const EvalResult& lastEval, 
         Node* src = graph.FindNode(id);
         if (!src || src->type == NodeType::Output) return;
         Node copy = *src;
-        int newId = graph.AddNode(copy.type, UniqueName(graph, copy.type, NodeKindName(copy.type)));
+        const char* base = copy.type == NodeType::PlanarProjection ? GetPlanarInfo(copy.planar).name : NodeKindName(copy.type);
+        int newId = graph.AddNode(copy.type, UniqueName(graph, copy.type, base));
         std::string name = graph.FindNode(newId)->name;
         Node* dst = graph.FindNode(newId);
         *dst = copy;
@@ -417,11 +621,27 @@ void DrawNodeEditor(NodeGraph& graph, Options& opt, const EvalResult& lastEval, 
     ImVec2 addAt(0, 0);
     NodeType toAdd = NodeType::Object;
     const char* toAddLabel = nullptr;
+    int toAddPlanar = -1;  // a slides' projection picked from the Projection menu
+    auto pickProjection = [&](int planar) {
+        toAdd = planar < 0 ? NodeType::Projection : NodeType::PlanarProjection;
+        toAddLabel = planar < 0 ? "Projection" : GetPlanarInfo(planar).name;
+        toAddPlanar = planar;
+    };
 
     ImGui::AlignTextToFramePadding();
     ImGui::TextDisabled("Add:");
     for (auto& k : kSourceKinds) {
         ImGui::SameLine();
+        if (k.type == NodeType::Projection) {
+            // A menu: the perspective node, or a projection from the slides.
+            if (ColoredButton("Projection...", TypeColor(k.type))) ImGui::OpenPopup("add_projection");
+            if (ImGui::BeginPopup("add_projection")) {
+                int planar;
+                if (ProjectionMenu(&planar)) pickProjection(planar);
+                ImGui::EndPopup();
+            }
+            continue;
+        }
         if (ColoredButton(k.label, TypeColor(k.type))) { toAdd = k.type; toAddLabel = k.label; }
     }
     ImGui::SameLine(); ImGui::TextDisabled("|");
@@ -452,6 +672,9 @@ void DrawNodeEditor(NodeGraph& graph, Options& opt, const EvalResult& lastEval, 
         ImGui::TextDisabled("Replace the whole graph with:");
         if (ImGui::MenuItem("The starter example")) ResetGraph(graph, true);
         if (ImGui::MenuItem("An empty graph (just MVP Output)")) ResetGraph(graph, false);
+        ImGui::SeparatorText("Projections (slides)");
+        for (int i = 0; i < kProjectionExampleCount; ++i)
+            if (ImGui::MenuItem(kProjectionExamples[i])) LoadProjectionExample(graph, i);
         ImGui::Separator();
         ImGui::MenuItem("Cancel");
         ImGui::EndPopup();
@@ -462,6 +685,7 @@ void DrawNodeEditor(NodeGraph& graph, Options& opt, const EvalResult& lastEval, 
     ImGui::SameLine();
     ImGui::TextDisabled("(?)");
     if (ImGui::IsItemHovered()) ImGui::SetTooltip("%s", kControlsHelp);
+    DrawAnimationBar(graph, lastEval, numSelNodes);
     for (auto& w : lastEval.warnings)
         ImGui::TextColored(ImVec4(1.0f, 0.7f, 0.3f, 1.0f), "! %s", w.c_str());
 
@@ -473,6 +697,7 @@ void DrawNodeEditor(NodeGraph& graph, Options& opt, const EvalResult& lastEval, 
     }
     if (toAddLabel) {
         int id = graph.AddNode(toAdd, UniqueName(graph, toAdd, toAddLabel));
+        if (toAddPlanar >= 0) SetPlanarKind(*graph.FindNode(id), toAddPlanar);
         ImNodes::SetNodeScreenSpacePos(id, addAt);
         ++spawnCount;
     }
@@ -482,6 +707,8 @@ void DrawNodeEditor(NodeGraph& graph, Options& opt, const EvalResult& lastEval, 
     ImGui::PushStyleColor(ImGuiCol_FrameBgHovered, Hex(0x303644));
     ImGui::PushStyleColor(ImGuiCol_FrameBgActive, Hex(0x394052));
     ImNodes::BeginNodeEditor();
+    // Nodes of the Projection chain can be animated one at a time in view 1.
+    std::vector<int> projChain = graph.ProjectionChain();
 
     for (auto& n : graph.nodes) {
         ImU32 title = TitleColorFor(n);
@@ -573,8 +800,16 @@ void DrawNodeEditor(NodeGraph& graph, Options& opt, const EvalResult& lastEval, 
                     ImGui::DragFloat("far", &n.farPlane, 0.25f, 1.0f, 500.0f);
                     ImGui::TextDisabled("aspect %.2f (from camera window)", n.aspect);
                     break;
+                case NodeType::PlanarProjection:
+                    DrawPlanarControls(n, opt.showMatrices, &expandRequest);
+                    break;
                 default: break;
             }
+
+            // A Planar Projection with several matrices is expanded first.
+            bool inProj = std::find(projChain.begin(), projChain.end(), n.id) != projChain.end();
+            if (CanAnimate(n)) DrawAnimateControls(graph, n);
+            else if (n.type == NodeType::PlanarProjection) ImGui::TextDisabled("Expand it to animate its matrices.");
 
             if (opt.showMatrices && n.type != NodeType::Object) {
                 const char* label =
@@ -582,7 +817,8 @@ void DrawNodeEditor(NodeGraph& graph, Options& opt, const EvalResult& lastEval, 
                     n.kind == ChainKind::Model            ? "model so far (M):" :
                     n.kind == ChainKind::CameraPose       ? "camera pose so far (C):" :
                     n.kind == ChainKind::Projection       ? "projection so far (P):" :
-                    n.kind == ChainKind::Invalid          ? "cycle: invalid chain" : "matrix so far (no source):";
+                    n.kind == ChainKind::Invalid          ? "cycle: invalid chain" :
+                    n.type == NodeType::PlanarProjection || inProj ? "projection so far (P):" : "matrix so far (no source):";
                 ImGui::TextUnformatted(label);
                 MatrixText(n.cumulativeMatrix);
             }
@@ -652,7 +888,19 @@ void DrawNodeEditor(NodeGraph& graph, Options& opt, const EvalResult& lastEval, 
             ImNodes::SetNodeScreenSpacePos(id, at);
         };
         ImGui::TextDisabled("Sources");
-        for (auto& k : kSourceKinds) if (ImGui::MenuItem(k.label)) add(k.type, k.label);
+        for (auto& k : kSourceKinds) {
+            if (k.type != NodeType::Projection) {
+                if (ImGui::MenuItem(k.label)) add(k.type, k.label);
+            } else if (ImGui::BeginMenu("Projection")) {
+                int planar;
+                if (ProjectionMenu(&planar)) {
+                    add(planar < 0 ? NodeType::Projection : NodeType::PlanarProjection,
+                        planar < 0 ? "Projection" : GetPlanarInfo(planar).name);
+                    if (planar >= 0) SetPlanarKind(graph.nodes.back(), planar);
+                }
+                ImGui::EndMenu();
+            }
+        }
         ImGui::Separator();
         ImGui::TextDisabled("Transforms");
         for (auto& k : kTransformKinds) if (ImGui::MenuItem(k.label)) add(k.type, k.label);
@@ -663,6 +911,11 @@ void DrawNodeEditor(NodeGraph& graph, Options& opt, const EvalResult& lastEval, 
             if (ImGui::MenuItem("Delete selected", "Del")) queueSelected();
         }
         ImGui::EndPopup();
+    }
+
+    if (expandRequest >= 0) {
+        ImNodes::ClearNodeSelection();
+        graph.ExpandPlanar(expandRequest);
     }
 
     // ---- apply deletions ----
