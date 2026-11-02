@@ -35,6 +35,7 @@ std::vector<Vertex> TriangleVerts(const glm::vec3 corners[3]);  // flat orange t
 std::vector<Vertex> GridVerts(int half);   // ground grid on y = 0, from -half to +half
 std::vector<Vertex> AxesVerts(float len);  // red X, green Y, blue Z
 std::vector<Vertex> NdcBoxVerts();         // edges of the cube [-1, 1]^3
+std::vector<Vertex> ViewPlaneVerts();      // the square [-1, 1]^2 at z = 0, as lines
 
 // The student's camera volume, in camera space. The first kFrustumWarpable
 // vertices are the near/far rectangles and their connecting edges, which get
@@ -98,6 +99,7 @@ struct Scene {
     Mesh triangle;  // re-uploaded per triangle object, since each has its own corners
     Mesh frustum;  // rebuilt every frame from the projection settings
     Mesh ndcBox;   // edges of the cube [-1,1]^3 plus the center lines on its floor
+    Mesh viewPlane;  // a projection's view plane, for the projection steps in view 1
 
     void Init();                             // uploads the static meshes
     void UpdateFrustum(const EvalResult& ev);

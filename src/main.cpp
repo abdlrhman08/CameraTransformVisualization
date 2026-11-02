@@ -72,6 +72,11 @@ static void DrawMenuBar(GLFWwindow* window, NodeGraph& graph, Options& opt, Wind
     if (ImGui::BeginMenu("Graph")) {
         if (ImGui::MenuItem("Load starter example")) ResetGraph(graph, true);
         if (ImGui::MenuItem("New empty graph")) ResetGraph(graph, false);
+        if (ImGui::BeginMenu("Projection examples")) {
+            for (int i = 0; i < kProjectionExampleCount; ++i)
+                if (ImGui::MenuItem(kProjectionExamples[i])) LoadProjectionExample(graph, i);
+            ImGui::EndMenu();
+        }
         ImGui::EndMenu();
     }
     if (ImGui::BeginMenu("Help")) {
@@ -196,7 +201,8 @@ int main(int argc, char** argv) {
             opt.warpPhase += dt * 0.35f;
             opt.warp = 0.5f - 0.5f * std::cos(opt.warpPhase * 3.14159265f);
         }
-        for (auto& n : graph.nodes) if (n.type == NodeType::Projection) n.aspect = cameraView.aspect;
+        for (auto& n : graph.nodes)
+            if (n.type == NodeType::Projection || n.type == NodeType::PlanarProjection) n.aspect = cameraView.aspect;
         ev = graph.Evaluate();
         scene.UpdateFrustum(ev);
 

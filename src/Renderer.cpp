@@ -43,7 +43,9 @@ void main() {
     vec4 eye = uToEye * scene;
     vec4 clip = uCamProj * eye;
 
-    vec3 pos = scene.xyz;
+    // Divided by w, for a projective uModel (a projection step shown in view 1).
+    // Ordinary models have w = 1.
+    vec3 pos = clamp(scene.xyz / max(scene.w, 1e-3), vec3(-300.0), vec3(300.0));
     if (uWarp > 0.0) {
         float w = max(clip.w, 1e-3);
         vec3 ndc = clip.xyz / w;
@@ -53,7 +55,7 @@ void main() {
         // Lay the cube out in front of the fixed camera: NDC z = -1 is the near face, +1 the far face.
         vec3 projected = vec3(ndc.x, ndc.y, 0.0) * uBoxHalf + vec3(0.0, 0.0, -(uBoxCenter + zn * uBoxHalf));
         projected = clamp(projected, vec3(-300.0), vec3(300.0));
-        pos = mix(scene.xyz, projected, uWarp);
+        pos = mix(pos, projected, uWarp);
     }
 
     gl_Position = uObsProj * uObsView * vec4(pos, 1.0);
@@ -226,12 +228,27 @@ std::vector<Vertex> NdcBoxVerts() {
     return v;
 }
 
+// The square [-1, 1]^2 at z = 0: its outline, a center cross, and a few grid lines.
+std::vector<Vertex> ViewPlaneVerts() {
+    std::vector<Vertex> v;
+    glm::vec3 edge(0.35f, 0.9f, 0.95f), inner(0.2f, 0.5f, 0.55f);
+    for (int i = -2; i <= 2; ++i) {
+        float s = i * 0.5f;
+        glm::vec3 c = (i == -2 || i == 2) ? edge : inner;
+        PushLine(v, {s, -1, 0}, {s, 1, 0}, c);
+        PushLine(v, {-1, s, 0}, {1, s, 0}, c);
+    }
+    return v;
+}
+
 std::vector<Vertex> FrustumVerts(const EvalResult& ev) {
     // The visible volume is whatever P maps onto the NDC cube [-1, 1]^3, so its
     // corners are the cube's corners mapped back through P^-1. This works for any
-    // invertible P: a perspective pyramid, an orthographic box, the identity's
-    // 2x2x2 box around the camera, or a custom matrix.
-    glm::vec3 p[8];
+    // invertible P: a perspective pyramid, an orthographic box, an oblique slanted
+    // box, the identity's 2x2x2 box around the camera, or a custom matrix.
+    // A singular P (like a slide matrix that drops z) has no volume: the edges
+    // collapse to the camera's origin.
+    glm::vec3 p[8] = {};
     const float sx[4] = {-1, 1, 1, -1}, sy[4] = {-1, -1, 1, 1};
     bool invertible = std::fabs(glm::determinant(ev.projection)) > 1e-12f;
     if (invertible) {
@@ -240,13 +257,6 @@ std::vector<Vertex> FrustumVerts(const EvalResult& ev) {
             glm::vec4 c = inv * glm::vec4(sx[i % 4], sy[i % 4], i < 4 ? -1.0f : 1.0f, 1.0f);
             float w = std::fabs(c.w) < 1e-9f ? 1e-9f : c.w;
             p[i] = glm::vec3(c) / w;
-        }
-    } else {
-        // Singular P: fall back to the Projection node's fov/near/far.
-        float th = std::tan(glm::radians(ev.fovDeg) * 0.5f);
-        for (int i = 0; i < 8; ++i) {
-            float d = i < 4 ? ev.nearPlane : ev.farPlane;
-            p[i] = glm::vec3(sx[i % 4] * th * ev.aspect * d, sy[i % 4] * th * d, -d);
         }
     }
     int edges[12][2] = {{0,1},{1,2},{2,3},{3,0}, {4,5},{5,6},{6,7},{7,4}, {0,4},{1,5},{2,6},{3,7}};
@@ -347,6 +357,7 @@ void Scene::Init() {
     grid.Upload(GridVerts(12), GL_LINES);
     axes.Upload(AxesVerts(1.5f), GL_LINES);
     ndcBox.Upload(NdcBoxVerts(), GL_LINES);
+    viewPlane.Upload(ViewPlaneVerts(), GL_LINES);
 }
 
 void Scene::UpdateFrustum(const EvalResult& ev) {
